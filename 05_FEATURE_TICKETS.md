@@ -227,7 +227,7 @@ unavailable Bedrock raises a typed error naming the missing configuration.
 single-construction-site rule.
 **Security:** AWS credentials come from the standard credential chain only —
 never from config values or code.
-**Status:** PENDING
+**Status:** DONE
 
 ### C2-02 · Agent base and structured output
 **Purpose:** A uniform, safe contract for every runtime agent.
@@ -245,7 +245,7 @@ untrusted-data block.
 **Tests:** unit tests for valid output, malformed output exhausting retries, and
 a denied out-of-allowlist tool call.
 **Security:** See `03_SECURITY_ACCESS.md` §5 and §8.
-**Status:** PENDING
+**Status:** DONE
 
 ### C2-03 · Tool registry and dispatcher
 **Purpose:** The enforcement point between agents and capability.
@@ -263,7 +263,7 @@ test that enumerates the registry.
 **Tests:** `tests/security/test_policy_matrix.py` covering every matrix row.
 **Security:** This ticket *is* the security boundary — no model sits in the
 decision path.
-**Status:** PENDING
+**Status:** DONE
 
 ### C2-04 · Deterministic state machine
 **Purpose:** Single source of truth for run progress.
@@ -281,7 +281,7 @@ transitions raise; each transition persists actor and evidence.
 no-dead-end graph tests; a concurrency test that two racing transitions cannot
 both commit.
 **Security:** `transition` is not exposed as an agent-callable tool.
-**Status:** PENDING
+**Status:** DONE
 
 ### C2-05 · Orchestrator agent and run coordinator
 **Purpose:** Drive a run without owning policy.
@@ -298,7 +298,7 @@ asserted by a test over its tool allowlist.
 **Tests:** integration test of a full stubbed run including pause and resume
 across a restart.
 **Security:** Orchestrator does not override policy.
-**Status:** PENDING
+**Status:** DONE
 
 ### C2-06 · Agent skeletons
 **Purpose:** Real, tool-capable skeletons for the six specialist agents.
@@ -314,7 +314,7 @@ allowlists.
 **Tests:** contract tests per agent; a test asserting no agent returns a
 hardcoded result.
 **Security:** Least tool privilege per role.
-**Status:** PENDING
+**Status:** DONE
 
 ### C2-07 · Strands end-to-end proof
 **Purpose:** Prove Strands genuinely drives a tool and returns validated state.
@@ -328,7 +328,7 @@ the test **skips with a message naming the exact missing configuration** — it
 never silently passes, and `STATUS.md` records the blocker.
 **Tests:** this ticket is the test.
 **Security:** Exercises the policy path, not a bypass.
-**Status:** PENDING
+**Status:** DONE
 
 ### C2-08 · Approval state model
 **Purpose:** Persisted approval state that the dispatcher and coordinator need in
@@ -346,7 +346,7 @@ requires an authenticated user id from C1-05; the state survives a restart.
 **Tests:** unit tests for each transition; a test that an agent-layer write
 attempt fails.
 **Security:** Approval is deterministic state. No model output can produce it.
-**Status:** PENDING
+**Status:** DONE
 
 ---
 

@@ -7,6 +7,7 @@ license = { file = "LICENSE" }
 requires-python = ">=3.12"
 
 dependencies = [
+    "strands-agents>=1.55",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "pydantic>=2.10",

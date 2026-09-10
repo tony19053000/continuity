@@ -29,7 +29,13 @@ Local toolchain confirmed on this machine: Python 3.12.3, Node 22.22.1,
 npm 10.9.4, git 2.43.0, `gh` 2.45.0 authenticated as `tony19053000`.
 
 Installed in Phase 1: FastAPI 0.141.1, SQLAlchemy 2.0.52, Next.js 16.3.4,
-React 19.2.8, Tailwind 4, Vitest 5.0.0.
+React 19.2.8, Tailwind 4, Vitest 5.0.0. Added in Phase 2: `strands-agents`.
+
+Verified against the installed SDK rather than the docs alone:
+`Agent(model=..., system_prompt=..., tools=[...])`,
+`await agent.invoke_async(prompt, structured_output_model=Model)` →
+`result.structured_output`, and `BedrockModel(model_id=..., region_name=...,
+temperature=...)`.
 
 **Environment management uses `uv`, not `venv`.** This machine's Python has no
 `ensurepip`, so `python -m venv` fails and the system interpreter is
@@ -757,6 +763,20 @@ signed, stateless bearer tokens, so deleting the browser's copy cannot revoke a
 copy captured elsewhere; the token carries the version it was minted at, and
 `current_user` refuses any token whose version does not match the stored value.
 One increment therefore invalidates every outstanding session for that user.
+
+### Agent execution seam
+
+`ContinuityAgent` builds a model from the provider, renders a prompt, and calls
+an injected `AgentRunner`. `StrandsAgentRunner` is the production implementation
+and drives a real `strands.Agent`; tests substitute a stub to exercise retry,
+malformed output, and escalation without a live model.
+
+The seam exists because the behaviour worth testing — that invalid output is
+retried a bounded number of times and then *escalates* rather than being coerced
+— is contract enforcement in `ContinuityAgent`, not model behaviour. Testing it
+through a live model would be slow, non-deterministic, and would still not prove
+the contract holds. The genuineness of the Strands path is proven separately and
+only by C2-07, which never passes without Bedrock.
 
 ### Cross-origin access
 

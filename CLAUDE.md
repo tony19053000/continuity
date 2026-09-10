@@ -64,24 +64,28 @@ completion percentage because code was written — a phase counts only after
 
 ## 4. Verification commands
 
-Backend:
+One command runs every gate check and prints a single line per check:
 
 ```bash
-pytest
-ruff check .
-mypy backend
+./scripts/verify.sh
 ```
 
-Frontend (from `apps/web/`):
+Failures print their detail; successes print one line. `--full` shows
+everything. **Reviewers should run this rather than the eight commands
+individually** — reading pages of passing output costs far more than it proves.
+
+The underlying commands, for focused work while developing:
 
 ```bash
-npm run typecheck
-npm run lint
-npm run test
-npm run build
+uv run pytest tests/unit/agents      # or any subset
+uv run ruff check .
+uv run mypy backend
+uv run alembic check
 ```
 
-Run focused tests while developing; run everything before a phase gate.
+Frontend (from `apps/web/`): `npm run typecheck | lint | test | build`.
+
+Note the environment uses `uv`, not `venv` — see `02_ARCHITECTURE.md` §1.
 
 ## 5. Git discipline
 

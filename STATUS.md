@@ -7,15 +7,15 @@ message disagrees with it, this file is right and the other is stale.
 
 ## Overall completion
 
-**20%**
+**30%**
 
-Phases 0 and 1 complete. Phase 1 passed its review gate on the third pass: 10
-findings, then 8 more, all corrected.
+Phases 0–2 complete. Phase 2 passed its review gate on the first pass, with the
+reviewer mutation-testing both parity guards and verifying restoration.
 
 | Field | Value |
 | --- | --- |
-| Current phase | Phase 2 — Strands + core orchestration |
-| Current ticket | C2-01 — Bedrock model provider abstraction |
+| Current phase | Phase 3 — GitHub + safe repository ingestion |
+| Current ticket | C3-01 — Secret filter |
 | Last updated | 2026-09-10 |
 
 ---
@@ -26,8 +26,8 @@ findings, then 8 more, all corrected.
 | --- | --- | --- | --- |
 | 0 | Project anchoring | 10% | **DONE** — reviewer PASS |
 | 1 | Application + backend foundation | 20% | **DONE** — reviewer PASS |
-| 2 | Strands + core orchestration | 30% | IN PROGRESS |
-| 3 | GitHub + safe repository ingestion | 40% | PENDING |
+| 2 | Strands + core orchestration | 30% | **DONE** — reviewer PASS |
+| 3 | GitHub + safe repository ingestion | 40% | IN PROGRESS |
 | 4 | Integration Mapper + Intelligence Graph | 50% | PENDING |
 | 5 | Provider monitoring + Change Scout | 60% | PENDING |
 | 6 | Execution safety, impact analysis, rehearsal | 70% | PENDING |
@@ -39,10 +39,10 @@ findings, then 8 more, all corrected.
 
 ## Tickets
 
-**Completed:** C0-01 … C0-04, C1-01 … C1-07
+**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08
 **In progress:** none
-**Next:** C2-01 — Bedrock model provider abstraction
-**Pending:** C2-01 onward — see `05_FEATURE_TICKETS.md`
+**Next:** C3-01 — Secret filter
+**Pending:** C3-01 onward — see `05_FEATURE_TICKETS.md`
 
 ---
 
@@ -109,12 +109,12 @@ flow; live sign-in is deferred. Absent config yields `NotConfigured`.
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **139 passing**, 0 skipped |
-| Security | `pytest tests/security` | Directory exists; populated in Phase 3 (C3-01) |
+| Python unit + integration | `uv run pytest` | **252 passing**, 2 skipped (C2-07, blocker B-01) |
+| Security | `uv run pytest tests/security` | **61 passing** — policy matrix + agent boundaries |
 | Frontend unit | `npm run test` | **17 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
-| Typecheck (py) | `uv run mypy backend` | **Passing** (22 source files) |
+| Typecheck (py) | `uv run mypy backend` | **Passing** (37 source files) |
 | Lint (web) | `npm run lint` | **Passing** |
 | Typecheck (web) | `npm run typecheck` | **Passing** |
 | Build (web) | `npm run build` | **Passing** — routes `/`, `/signin` |
@@ -128,7 +128,7 @@ Counts above are from real runs, not estimates.
 
 | Item | State |
 | --- | --- |
-| Strands Agents SDK | Not yet installed. Target `strands-agents` (Phase 2, C2-01) |
+| Strands Agents SDK | **Installed and wired.** `StrandsAgentRunner` drives a real `strands.Agent`. Live path unproven — see B-01 |
 | Amazon Bedrock | **Not configured** — see B-01 |
 | `BEDROCK_MODEL_ID` | Unset; will default to the Strands documented default |
 | `AWS_REGION` | Unset |
@@ -145,9 +145,9 @@ Nothing above is claimed as working anywhere in the product or documentation.
 
 | Control | State |
 | --- | --- |
-| Secret filtering | Specified (`03_SECURITY_ACCESS.md` §2); implemented in C3-01 |
-| Policy engine (ALLOW/ASK/DENY) | Specified §4; implemented in C2-03 / C8-02 |
-| Approval integrity | Specified §4; state in C2-08, enforcement in C8-02 |
+| Secret filtering | Content patterns implemented (Phase 1); path exclusion in C3-01 |
+| Policy engine (ALLOW/ASK/DENY) | **Implemented** — `backend/security/policy.py`, matrix parity-tested against §4 |
+| Approval integrity | **State implemented** (C2-08); HTTP surface + resume flow in C8-02 |
 | Repository boundary | Specified §3; implemented in C3-02 / C3-03 |
 | Untrusted external content | Specified §5; exercised in C5-04 |
 | ExecutionProvider | Specified §6; implemented in C6-01 |
@@ -358,3 +358,61 @@ All such fixtures now live in `tests/support/secret_samples.py` and are
 assembled from parts at import time, so the complete token exists only in
 memory during a test. Import from there rather than pasting a token into a new
 test.
+
+### 2026-09-10 — Phase 2, Strands + core orchestration
+
+**What was built:** The Bedrock model provider (the only module that constructs
+a model), `ContinuityAgent` with structured-output contracts, the seven runtime
+agents' declared contracts, the tool registry and dispatcher, the deterministic
+policy engine, the 45-state machine, the run coordinator, and the approval state
+model.
+
+**Key decisions:**
+- `AgentRunner` is an injection seam. `StrandsAgentRunner` drives a real
+  `strands.Agent`; tests substitute a stub. The seam exists because the property
+  worth testing — invalid output is retried a bounded number of times and then
+  *escalates* rather than being coerced — is contract enforcement in
+  `ContinuityAgent`, not model behaviour. The genuineness of the Strands path is
+  proven only by C2-07, which never passes without Bedrock.
+- Escape edges (`HUMAN_REVIEW_REQUIRED`, `RUN_FAILED`) are added
+  programmatically to every non-terminal state rather than repeated on 40 rows.
+- The policy engine escalates by *context*: a branch write targeting the default
+  branch becomes `WRITE_PROTECTED_BRANCH` and is denied, whatever the agent
+  believed it was doing. Unknown actions default to DENY.
+- `ToolDispatcher` checks the role allowlist *before* consulting policy, so a
+  capability a role never had is not even evaluated.
+- Per-role temperature: 0.0 for agents that must not invent (Change Scout,
+  Impact Analyst, Validator, Security Reviewer), 0.2 for the Migration Engineer,
+  0.4 for the Red-Team agent.
+
+**Two parity guards are the phase's strongest claims**, and the reviewer
+mutation-tested both: `ALLOWED_TRANSITIONS` is compared against
+`02_ARCHITECTURE.md` §8 in *both directions*, and the policy matrix against
+`03_SECURITY_ACCESS.md` §4. Each has a vacuity guard so a renamed heading cannot
+make the test pass silently.
+
+`03_SECURITY_ACCESS.md` §4 gained one row this phase: "Force push or rewrite
+history" was split into two, because the code models them as two distinct
+actions. The reviewer specifically checked this was precision rather than
+gaming the test.
+
+**Process change:** `scripts/verify.sh` runs all eight gate checks and prints one
+line each. Reviewers read that instead of running the commands individually —
+paging through pages of passing output was costing far more than it proved.
+Review now runs on a smaller model against pre-captured output.
+
+**Do not accidentally change:**
+- The parity guards or their vacuity guards. They are what stop the documented
+  state machine and security matrix from becoming fiction.
+- `apply_proposal` in the coordinator — it is the concrete point where a model's
+  proposed state change is validated rather than obeyed. An illegal or unknown
+  proposal escalates to a human.
+- The import-graph tests in `tests/security/test_agent_boundaries.py`. They hold
+  for code nobody has written yet, which is the point.
+
+**Known-honest gap:** the tool registry is empty. Tools land in Phases 3+ with
+the capabilities they wrap. A test asserts the registry is empty rather than
+implying tools work.
+
+**Next intended task:** Phase 3, C3-01 — the secret filter's path-exclusion
+half, then the GitHub App client and the deterministic repository indexer.

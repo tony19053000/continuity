@@ -180,7 +180,8 @@ Tool dispatcher → PolicyEngine.classify(action, context) → ALLOW | ASK | DEN
 | Weaken or delete a failing test | **ASK** | Requires reviewer confirmation the test is invalid |
 | Expose or transmit credentials | **DENY** | |
 | Delete a repository or branch outside `continuity/` | **DENY** | |
-| Force push or rewrite history | **DENY** | |
+| Force push | **DENY** | |
+| Rewrite repository history | **DENY** | |
 | Commit to the default or a protected branch | **DENY** | |
 | Merge a pull request | **DENY** | |
 | Bypass or self-approve the approval system | **DENY** | |
