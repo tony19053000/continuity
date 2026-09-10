@@ -174,7 +174,7 @@ Nothing above is claimed as working anywhere in the product or documentation.
 | Field | Value |
 | --- | --- |
 | Branch | `main` (tracking `origin/main`) |
-| Latest commit | `4afb606` — feat: application and backend foundation |
+| Latest commit | `7416759` — feat: Strands agent runtime and deterministic orchestration |
 | Push state | Pushed to `origin/main` successfully |
 
 ---
