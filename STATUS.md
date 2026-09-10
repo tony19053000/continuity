@@ -174,9 +174,9 @@ Nothing above is claimed as working anywhere in the product or documentation.
 
 | Field | Value |
 | --- | --- |
-| Branch | `main` |
-| Latest commit | *(none yet — Phase 0 commit pending review PASS)* |
-| Push state | Not pushed. `gh` is authenticated, so push is expected to work |
+| Branch | `main` (tracking `origin/main`) |
+| Latest commit | `cd79204` — docs: establish Continuity product and engineering foundation |
+| Push state | Pushed to `origin/main` successfully |
 
 ---
 
