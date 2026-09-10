@@ -176,7 +176,7 @@ Nothing above is claimed as working beyond what the live tests prove.
 | Field | Value |
 | --- | --- |
 | Branch | `main` (tracking `origin/main`) |
-| Latest commit | `88e3e77` — feat: Google Gemini as primary model; external integrations verified live |
+| Latest commit | `0953384` — feat: Integration Intelligence Graph |
 | Push state | Pushed to `origin/main` successfully |
 
 ---
