@@ -28,6 +28,22 @@ appear stale.
 Local toolchain confirmed on this machine: Python 3.12.3, Node 22.22.1,
 npm 10.9.4, git 2.43.0, `gh` 2.45.0 authenticated as `tony19053000`.
 
+Installed in Phase 1: FastAPI 0.141.1, SQLAlchemy 2.0.52, Next.js 16.3.4,
+React 19.2.8, Tailwind 4, Vitest 5.0.0.
+
+**Environment management uses `uv`, not `venv`.** This machine's Python has no
+`ensurepip`, so `python -m venv` fails and the system interpreter is
+PEP 668-managed. `uv` creates the environment without either constraint and is
+what CI uses, so local and CI environments resolve identically.
+
+Two dependency pins are deliberate rather than incidental:
+
+- **Vitest 5.** Versions 2.1.0–4.1.10 carry a path-traversal advisory in
+  `@vitest/mocker` (GHSA-82fw-gwwq-j7x9). Vitest 4 additionally crashed npm
+  10.9.4's peer resolver.
+- **`@types/node` ^22.** Vitest 5 requires `^22 || >=24`, and 22 matches the
+  Node runtime in use.
+
 **Not available on this machine:** AWS CLI is not installed and `~/.aws` does
 not exist. See `STATUS.md` → Blockers. This does not block Phases 0–1 and
 partially blocks live model calls from Phase 2 onward; the design keeps the
@@ -689,9 +705,68 @@ Test results are never produced by a model.
 Core tables: `users`, `projects`, `repositories`, `github_installations`,
 `integrations`, `graph_nodes`, `graph_edges`, `providers`,
 `provider_baselines`, `provider_specs`, `change_events`, `agent_runs`,
-`agent_steps`, `tool_invocations`, `migration_runs`, `migration_attempts`,
-`test_results`, `security_findings`, `approvals`, `pull_requests`,
-`activity_events`, `audit_events`.
+`agent_steps`, `tool_invocations`, `jobs`, `state_transitions`,
+`migration_runs`, `migration_attempts`, `test_results`, `security_findings`,
+`approvals`, `pull_requests`, `activity_events`, `audit_events`.
+
+`jobs` backs the queue in §15 and `state_transitions` backs the audited history
+in §8; both are named in prose there and listed here so the table set has a
+single authoritative home.
+
+### Implementation notes (Phase 1)
+
+- **Enums are stored as text, not native database enums.** `StrEnumType`
+  (`backend/models/base.py`) is a `TypeDecorator` that binds a `StrEnum` as a
+  string and converts it back on load. A native ENUM would require a migration
+  for every new member, and `RunState` has 45 that will grow; text storage keeps
+  those changes free while `Mapped[RunState]` still loads a real `RunState`.
+- **Migrations never import application code.** Alembic's `render_item` hook
+  renders `StrEnumType` columns as `sa.String(length=n)`, which is what the
+  database actually sees. Rendering the decorator would couple frozen schema
+  history to code that keeps changing.
+- **SQLite foreign keys are explicitly enabled** via a `PRAGMA foreign_keys=ON`
+  connect listener. SQLite disables them by default, which would let a
+  development database accept rows PostgreSQL would reject — including an
+  approval referencing a non-existent user.
+- **`alembic.ini` contains no connection string.** `env.py` reads the URL from
+  `Settings`, so no database URL is ever committed.
+
+### Constraints that enforce documented guarantees
+
+These constraints are load-bearing, not incidental:
+
+| Constraint | Guarantee |
+| --- | --- |
+| `approvals.actor_user_id` → `users.id` | An approval cannot name a user who does not exist |
+| `ck_approval_resolved_requires_actor` | A row whose status is APPROVED or REJECTED must name a user — an unattributed approval cannot be stored at all |
+| `ck_approval_resolved_requires_timestamp` | A resolved approval must record when, so the audit trail has no holes |
+| `uq_change_event_dedup` on `(provider_id, old_version, new_version, change_type, resource)` | Polling a provider repeatedly cannot manufacture duplicate change events |
+| `uq_attempt_number` on `(migration_run_id, attempt_number)` | The repair retry budget holds at the database level, not only in application code |
+
+**What the approval constraints do and do not prove.** They make an
+unattributed or untimed approval unstorable, which is the half of
+`03_SECURITY_ACCESS.md` §4 a schema can enforce. They cannot prove *consent* —
+a caller could supply any valid user id. Binding `actor_user_id` to the
+authenticated approver is the approval service's job (C8-02); the constraints
+are what stop that service from being bypassed silently rather than loudly.
+
+### Session revocation
+
+`users.session_version` is an integer bumped on sign-out. Session cookies are
+signed, stateless bearer tokens, so deleting the browser's copy cannot revoke a
+copy captured elsewhere; the token carries the version it was minted at, and
+`current_user` refuses any token whose version does not match the stored value.
+One increment therefore invalidates every outstanding session for that user.
+
+### Cross-origin access
+
+The frontend is served from its own origin, so browser requests to the API are
+cross-origin. `CORSMiddleware` allows exactly `FRONTEND_ORIGIN` with
+`allow_credentials=True` — required because the session is an HttpOnly cookie,
+and the reason the allowed origin is one exact value rather than a wildcard:
+the CORS spec forbids combining the two, and a wildcard would let any site read
+authenticated responses. `FRONTEND_ORIGIN` defaults to `http://localhost:3000`
+in development and is **required** in production, so CORS is never guessed.
 
 ### Migration run schema
 

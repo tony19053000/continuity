@@ -7,16 +7,15 @@ message disagrees with it, this file is right and the other is stale.
 
 ## Overall completion
 
-**10%**
+**20%**
 
-Phase 0 complete. The review gate ran twice: FAIL with 15 findings → all
-corrected → **PASS**. No application code exists yet, which is correct for this
-phase.
+Phases 0 and 1 complete. Phase 1 passed its review gate on the third pass: 10
+findings, then 8 more, all corrected.
 
 | Field | Value |
 | --- | --- |
-| Current phase | Phase 1 — Application + backend foundation |
-| Current ticket | C1-01 — Backend application skeleton |
+| Current phase | Phase 2 — Strands + core orchestration |
+| Current ticket | C2-01 — Bedrock model provider abstraction |
 | Last updated | 2026-09-10 |
 
 ---
@@ -26,8 +25,8 @@ phase.
 | Phase | Scope | Target | Status |
 | --- | --- | --- | --- |
 | 0 | Project anchoring | 10% | **DONE** — reviewer PASS |
-| 1 | Application + backend foundation | 20% | IN PROGRESS |
-| 2 | Strands + core orchestration | 30% | PENDING |
+| 1 | Application + backend foundation | 20% | **DONE** — reviewer PASS |
+| 2 | Strands + core orchestration | 30% | IN PROGRESS |
 | 3 | GitHub + safe repository ingestion | 40% | PENDING |
 | 4 | Integration Mapper + Intelligence Graph | 50% | PENDING |
 | 5 | Provider monitoring + Change Scout | 60% | PENDING |
@@ -40,10 +39,10 @@ phase.
 
 ## Tickets
 
-**Completed:** C0-01, C0-02, C0-03, C0-04
+**Completed:** C0-01 … C0-04, C1-01 … C1-07
 **In progress:** none
-**Next:** C1-01 — Backend application skeleton
-**Pending:** all of C1-01 onward — see `05_FEATURE_TICKETS.md` (50 tickets)
+**Next:** C2-01 — Bedrock model provider abstraction
+**Pending:** C2-01 onward — see `05_FEATURE_TICKETS.md`
 
 ---
 
@@ -110,18 +109,18 @@ flow; live sign-in is deferred. Absent config yields `NotConfigured`.
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit | `pytest` | Not yet created (Phase 1) |
-| Integration | `pytest tests/integration` | Not yet created (Phase 1) |
-| Security | `pytest tests/security` | Not yet created (Phase 3) |
-| Frontend unit | `npm run test` | Not yet created (Phase 1) |
+| Python unit + integration | `uv run pytest` | **139 passing**, 0 skipped |
+| Security | `pytest tests/security` | Directory exists; populated in Phase 3 (C3-01) |
+| Frontend unit | `npm run test` | **17 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
-| Lint (py) | `ruff check .` | Not yet configured (Phase 1) |
-| Typecheck (py) | `mypy backend` | Not yet configured (Phase 1) |
-| Lint (web) | `npm run lint` | Not yet configured (Phase 1) |
-| Typecheck (web) | `npm run typecheck` | Not yet configured (Phase 1) |
-| Build (web) | `npm run build` | Not yet configured (Phase 1) |
+| Lint (py) | `uv run ruff check .` | **Passing** |
+| Typecheck (py) | `uv run mypy backend` | **Passing** (22 source files) |
+| Lint (web) | `npm run lint` | **Passing** |
+| Typecheck (web) | `npm run typecheck` | **Passing** |
+| Build (web) | `npm run build` | **Passing** — routes `/`, `/signin` |
+| Migrations | `uv run alembic check` | **In sync** with the models |
 
-No test has ever been reported as passing. Nothing exists to run yet.
+Counts above are from real runs, not estimates.
 
 ---
 
@@ -279,3 +278,73 @@ because it *is* the gate.
 four specified components). Then C1-02 configuration, C1-03 persistence, C1-04
 errors/logging/events, C1-05 authentication, C1-06 frontend shell, C1-07
 engineering baseline — then the Phase 1 review gate.
+
+### 2026-09-10 — Phase 1, application + backend foundation
+
+**What was built:** FastAPI application factory with typed error handling and a
+four-component `/health`; `pydantic-settings` configuration with an explicit
+`NotConfigured` sentinel per integration group; 24-table SQLAlchemy schema with
+an Alembic baseline; structured JSON logging with handler-level secret
+redaction; Google OAuth sign-in with signed, revocable sessions; a Next.js
+shell rendering real backend state; and CI running all seven verification
+commands plus a build-output secret grep.
+
+**Environment note:** this machine's Python has no `ensurepip`, so `python -m
+venv` fails and the system interpreter is PEP 668-managed. `uv` is used instead,
+locally and in CI. Run commands as `uv run <cmd>`.
+
+**Key implementation decisions:**
+- `StrEnumType` (`backend/models/base.py`) stores `StrEnum` columns as text and
+  converts back on load. Native database ENUMs would need a migration per new
+  member, and `RunState` has 45 that will grow.
+- Migrations render `StrEnumType` as `sa.String` via Alembic's `render_item`,
+  so frozen schema history never imports application code.
+- SQLite foreign keys are explicitly enabled by a connect listener; SQLite
+  disables them by default, which would let a development database accept rows
+  PostgreSQL rejects.
+- `alembic.ini` carries no connection string; `env.py` reads it from `Settings`.
+- Sessions are signed stateless tokens carrying `users.session_version`. Sign-out
+  bumps the counter, which revokes every outstanding token rather than only the
+  browser's copy.
+- CORS allows exactly `FRONTEND_ORIGIN` with credentials — required for the
+  HttpOnly session cookie, and why a wildcard is impossible.
+
+**Review outcome:** the gate ran twice and failed the first time with 10
+findings, several of them false-green: `/auth/login` raised
+`SessionMiddleware must be installed` whenever Google was actually configured
+(only the unconfigured 503 path had tests, so the real sign-in flow had never
+run); log redaction missed anything nested inside an `extra` dict, list, or
+object `__repr__`; `approvals.actor_user_id` was nullable with no CHECK, so an
+`APPROVED` row with no approver could be inserted; the §16 activity-event
+vocabulary was documented but never implemented; an open redirect via
+`?redirect_to=`; sign-out that did not invalidate anything; a hardcoded green
+"Job queue: Ready" backed by nothing; a no-op empty router; a test that could
+not fail; and no sign-in UI.
+
+The second pass cleared all ten and found eight more, of which one was
+functional: **no CORS middleware existed**, so the browser could never reach the
+API — every frontend test stubbed `fetch`, leaving the suite green while the
+real path was blocked. The rest were honesty defects: docstrings claiming
+guarantees the code did not provide (the approval CHECK proves *attribution*,
+not consent), two more tests that could not fail, and documentation that had not
+caught up with the schema.
+
+**Verified by hand, not only by tests:** ran both servers and loaded the app in
+a browser. `/` renders real backend state (`degraded`, database connected, three
+integrations `Not configured`) and `/signin` states that signing in does not
+grant repository access.
+
+**Do not accidentally change:**
+- The two approval CHECK constraints, or the claim boundary around them: they
+  prove a resolved approval names a user and a time, not that a human consented.
+  Consent is C8-02's job.
+- `session_version` comparison in `current_user` — it is what makes sign-out
+  mean anything.
+- `allow_origins=[FRONTEND_ORIGIN]` with `allow_credentials=True`. A wildcard
+  here would let any site read authenticated responses, and the CORS spec
+  forbids combining the two anyway.
+- The activity-event vocabulary test, which parses `02_ARCHITECTURE.md` §16
+  rather than hardcoding the list. It is mutation-tested.
+
+**Next intended task:** Phase 2, C2-01 — the Bedrock model provider abstraction,
+then the Strands agent base and the deterministic tool dispatcher.

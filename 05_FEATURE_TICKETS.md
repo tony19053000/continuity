@@ -104,7 +104,7 @@ component is `ok`; a `not_configured` optional component yields `degraded`, not
 each component state and the overall roll-up.
 **Security:** `/health` exposes no credentials, secret values, or environment
 contents — only the four component states above.
-**Status:** PENDING
+**Status:** DONE
 
 ### C1-02 · Configuration and environment validation
 **Purpose:** Fail fast and loudly on misconfiguration; never invent values.
@@ -121,7 +121,7 @@ variable in `.env.example` is represented and none is undocumented.
 asserting `.env.example` and `Settings` fields are in sync.
 **Security:** `Settings.__repr__` and `__str__` redact every secret field.
 Asserted by test.
-**Status:** PENDING
+**Status:** DONE
 
 ### C1-03 · Persistence layer and domain models
 **Purpose:** Durable, transactional state for the whole workflow.
@@ -136,7 +136,7 @@ non-null `actor_user_id` at the database level.
 **Tests:** `tests/unit/models/` round-trip and constraint tests, including a test
 that an approval insert without an actor fails.
 **Security:** No credential column stores plaintext.
-**Status:** PENDING
+**Status:** DONE
 
 ### C1-04 · Errors, logging, activity events
 **Purpose:** Structured, secret-safe diagnostics from day one.
@@ -153,7 +153,7 @@ names are exactly the §16 vocabulary.
 in a log record.
 **Security:** Redaction filter applied at the logging handler level, so it cannot
 be bypassed by a caller that forgets it.
-**Status:** PENDING
+**Status:** DONE
 
 ### C1-05 · User authentication and session
 **Purpose:** Produce the authenticated human identity that the entire approval
@@ -176,7 +176,7 @@ clear error rather than an insecure fallback.
 **Security:** No local password storage. CSRF state parameter validated on
 callback. Tokens are never returned to the browser. This ticket is a hard
 prerequisite for C2-08 and C8-02 — an approval requires a real user id.
-**Status:** PENDING
+**Status:** DONE
 
 ### C1-06 · Frontend shell
 **Purpose:** Minimal Next.js app — shell only, no dashboard.
@@ -185,11 +185,16 @@ prerequisite for C2-08 and C8-02 — an approval requires a real user id.
 **Implementation:** Next.js App Router, TypeScript, Tailwind, base layout, error
 boundary, typed API client aligned to the OpenAPI schema.
 **Acceptance:** `npm run build` succeeds; the shell renders; the API client
-reaches `/health` and renders its component states.
+reaches `/health` from a browser origin and renders its component states —
+which requires CORS allowing exactly `FRONTEND_ORIGIN` with credentials, tested
+against the real middleware rather than a stubbed `fetch`.
 **Tests:** one Vitest render test; typecheck and lint pass.
 **Security:** No secret is referenced in client code; only `NEXT_PUBLIC_*`
-variables reach the browser, asserted by a build-output grep test.
-**Status:** PENDING
+variables reach the browser. Asserted by the CI job's build-output grep over
+`.next/static` and `.next/server` (`.github/workflows/ci.yml`), which runs after
+a real `next build` — a check that cannot run meaningfully inside the unit test
+suite because it needs the compiled bundle.
+**Status:** DONE
 
 ### C1-07 · Engineering baseline
 **Purpose:** The commands the reviewer runs at every gate.
@@ -201,7 +206,7 @@ typecheck|lint|test|build`; CI running all of them.
 **Tests:** the suite itself.
 **Security:** CI holds no secrets; the workflow sets read-only default
 permissions.
-**Status:** PENDING
+**Status:** DONE
 
 ---
 

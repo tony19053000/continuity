@@ -8,11 +8,12 @@ prepares and validates a safe migration, and delivers a reviewable pull request.
 
 Built on the [Strands Agents SDK](https://strandsagents.com) with Amazon Bedrock.
 
-> **Status: Phase 0 of 10 complete — project anchoring (10%).**
-> The anchor documentation and engineering process are established and have
-> passed an independent review gate. No application code exists yet; it begins
-> at Phase 1. See [`STATUS.md`](STATUS.md) for real, current state — it is
-> authoritative, and this line is not.
+> **Status: Phases 0–1 of 10 complete (20%).**
+> Anchor documentation, then the backend and frontend foundation: FastAPI app,
+> configuration, 24-table schema with migrations, redacting structured logging,
+> Google sign-in, and a Next.js shell that renders real backend state. The
+> Strands agent runtime begins at Phase 2. See [`STATUS.md`](STATUS.md) for
+> real, current state — it is authoritative, and this line is not.
 
 ---
 
@@ -95,12 +96,40 @@ Bedrock AgentCore · SQLAlchemy · Next.js · React · TypeScript · Tailwind CS
 
 ## Getting started
 
-Setup instructions will be added with Phase 1, when there is an application to
-run. Until then, `.env.example` documents every configuration variable the
-system will require.
+**Requirements:** Python 3.12, Node 20+, and [`uv`](https://docs.astral.sh/uv/).
+No AWS account or GitHub App is needed to run what exists today — unconfigured
+integrations report `Not configured` rather than failing.
 
-Requirements (planned): Python ≥ 3.10 (3.12 recommended), Node ≥ 20, an AWS
-account with Amazon Bedrock model access, and a GitHub App installation.
+```bash
+uv sync --extra dev
+uv run alembic upgrade head
+uv run uvicorn backend.api.app:create_app --factory --reload --port 8000
+```
+
+In a second terminal:
+
+```bash
+cd apps/web && npm install && npm run dev
+```
+
+Open http://localhost:3000. The dashboard shows live backend state: database
+connectivity, and which integrations are configured. Nothing on it is
+simulated.
+
+If the frontend starts on a different port (because 3000 is taken), set
+`FRONTEND_ORIGIN` to that origin before starting the API — CORS allows exactly
+one origin and never a wildcard, because the session is an HttpOnly cookie.
+
+**Configuration:** copy `.env.example` to `.env`. Every variable is documented
+there; secrets are left blank. Google sign-in, Amazon Bedrock, and the GitHub
+App are each optional and independent.
+
+**Verification:**
+
+```bash
+uv run pytest && uv run ruff check . && uv run mypy backend
+cd apps/web && npm run typecheck && npm run lint && npm run test && npm run build
+```
 
 ## License
 

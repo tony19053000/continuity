@@ -1,0 +1,123 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+# Least privilege: CI reads the repository and nothing else. No secrets are
+# available to any job (`03_SECURITY_ACCESS.md` §9).
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  backend:
+    name: Backend — tests, lint, types
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v7
+        with:
+          enable-cache: true
+
+      - name: Set up Python
+        run: uv python install 3.12
+
+      - name: Install dependencies
+        run: uv sync --extra dev
+
+      - name: Lint
+        run: uv run ruff check .
+
+      - name: Typecheck
+        run: uv run mypy backend
+
+      - name: Test
+        run: uv run pytest
+
+      - name: Verify migrations match the models
+        run: |
+          uv run alembic upgrade head
+          # An empty autogenerate diff means the migration is in sync. A
+          # non-empty one means someone changed a model without regenerating,
+          # which would ship a schema nobody deploys.
+          uv run alembic check
+
+  frontend:
+    name: Frontend — tests, lint, types, build
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: apps/web
+    steps:
+      - uses: actions/checkout@v5
+
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: apps/web/package-lock.json
+
+      - name: Install dependencies
+        run: npm ci
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Lint
+        run: npm run lint
+
+      - name: Test
+        run: npm run test
+
+      - name: Build
+        run: npm run build
+
+      - name: Assert no server-side configuration reached the bundle
+        run: |
+          # Only NEXT_PUBLIC_* variables may be inlined into client code. This
+          # greps the real build output rather than trusting review, because an
+          # accidental `process.env.SESSION_SECRET` in a client component is
+          # silent until it ships.
+          if grep -rIl --exclude-dir=cache \
+            -e 'SESSION_SECRET' \
+            -e 'GITHUB_APP_CLIENT_SECRET' \
+            -e 'GITHUB_APP_PRIVATE_KEY_PATH' \
+            -e 'GITHUB_APP_WEBHOOK_SECRET' \
+            -e 'GOOGLE_OAUTH_CLIENT_SECRET' \
+            -e 'DATABASE_URL' \
+            .next/static .next/server 2>/dev/null; then
+            echo "::error::Server-side configuration name found in build output"
+            exit 1
+          fi
+          echo "No server-side configuration names in build output."
+
+  secrets:
+    name: Secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+        with:
+          fetch-depth: 0
+
+      - name: Assert no committed secrets or .env files
+        run: |
+          if git ls-files | grep -E '(^|/)\.env($|\.)' | grep -v '\.env\.example'; then
+            echo "::error::A .env file is tracked in git"
+            exit 1
+          fi
+          if git ls-files -z | xargs -0 grep -lIE \
+            'AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' \
+            -- ':!03_SECURITY_ACCESS.md' ':!backend/shared/redaction.py' \
+               ':!tests/unit/shared/test_redaction.py' ':!.github/workflows/ci.yml' \
+               2>/dev/null; then
+            echo "::error::A credential-shaped string was found in a tracked file"
+            exit 1
+          fi
+          echo "No committed secrets found."
