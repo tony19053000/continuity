@@ -112,7 +112,7 @@ the prerequisite is met. `BedrockAgentCoreFullAccess` is attached to the
 | Frontend unit | `npm run test` | **17 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
-| Typecheck (py) | `uv run mypy backend` | **Passing** (52 source files) |
+| Typecheck (py) | `uv run mypy backend` | **Passing** (56 source files) |
 | Lint (web) | `npm run lint` | **Passing** |
 | Typecheck (web) | `npm run typecheck` | **Passing** |
 | Build (web) | `npm run build` | **Passing** — routes `/`, `/signin` |
