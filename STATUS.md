@@ -7,15 +7,16 @@ message disagrees with it, this file is right and the other is stale.
 
 ## Overall completion
 
-**30%**
+**40%**
 
-Phases 0–2 complete. Phase 2 passed its review gate on the first pass, with the
-reviewer mutation-testing both parity guards and verifying restoration.
+Phases 0–3 complete. Phase 3 took four review passes: two findings on scope
+silently unmet, then two on `.gitignore` tokenization — one over-excluding
+ordinary source, one under-filtering real secrets.
 
 | Field | Value |
 | --- | --- |
-| Current phase | Phase 3 — GitHub + safe repository ingestion |
-| Current ticket | C3-01 — Secret filter |
+| Current phase | Phase 4 — Integration Mapper + Intelligence Graph |
+| Current ticket | C4-01 — Graph persistence and query layer |
 | Last updated | 2026-09-10 |
 
 ---
@@ -27,8 +28,8 @@ reviewer mutation-testing both parity guards and verifying restoration.
 | 0 | Project anchoring | 10% | **DONE** — reviewer PASS |
 | 1 | Application + backend foundation | 20% | **DONE** — reviewer PASS |
 | 2 | Strands + core orchestration | 30% | **DONE** — reviewer PASS |
-| 3 | GitHub + safe repository ingestion | 40% | IN PROGRESS |
-| 4 | Integration Mapper + Intelligence Graph | 50% | PENDING |
+| 3 | GitHub + safe repository ingestion | 40% | **DONE** — reviewer PASS |
+| 4 | Integration Mapper + Intelligence Graph | 50% | IN PROGRESS |
 | 5 | Provider monitoring + Change Scout | 60% | PENDING |
 | 6 | Execution safety, impact analysis, rehearsal | 70% | PENDING |
 | 7 | Migration Engineer + repair loop | 80% | PENDING |
@@ -39,10 +40,10 @@ reviewer mutation-testing both parity guards and verifying restoration.
 
 ## Tickets
 
-**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08
+**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06
 **In progress:** none
-**Next:** C3-01 — Secret filter
-**Pending:** C3-01 onward — see `05_FEATURE_TICKETS.md`
+**Next:** C4-01 — Graph persistence and query layer
+**Pending:** C4-01 onward — see `05_FEATURE_TICKETS.md`
 
 ---
 
@@ -109,12 +110,12 @@ flow; live sign-in is deferred. Absent config yields `NotConfigured`.
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **252 passing**, 2 skipped (C2-07, blocker B-01) |
-| Security | `uv run pytest tests/security` | **61 passing** — policy matrix + agent boundaries |
+| Python unit + integration | `uv run pytest` | **462 passing**, 2 skipped (C2-07, blocker B-01) |
+| Security | `uv run pytest tests/security` | **145 passing** — policy, boundaries, secret filter, read-only |
 | Frontend unit | `npm run test` | **17 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
-| Typecheck (py) | `uv run mypy backend` | **Passing** (37 source files) |
+| Typecheck (py) | `uv run mypy backend` | **Passing** (52 source files) |
 | Lint (web) | `npm run lint` | **Passing** |
 | Typecheck (web) | `npm run typecheck` | **Passing** |
 | Build (web) | `npm run build` | **Passing** — routes `/`, `/signin` |
@@ -145,10 +146,10 @@ Nothing above is claimed as working anywhere in the product or documentation.
 
 | Control | State |
 | --- | --- |
-| Secret filtering | Content patterns implemented (Phase 1); path exclusion in C3-01 |
+| Secret filtering | **Implemented** — path exclusion, content redaction, and repository `.gitignore` rules, at all five enforcement points |
 | Policy engine (ALLOW/ASK/DENY) | **Implemented** — `backend/security/policy.py`, matrix parity-tested against §4 |
 | Approval integrity | **State implemented** (C2-08); HTTP surface + resume flow in C8-02 |
-| Repository boundary | Specified §3; implemented in C3-02 / C3-03 |
+| Repository boundary | **Implemented** — normalize-then-resolve, symlink-safe; one conformance suite over both sources |
 | Untrusted external content | Specified §5; exercised in C5-04 |
 | ExecutionProvider | Specified §6; implemented in C6-01 |
 | Confidential execution / TEE | Abstraction only — see B-04. **Not attested** |
@@ -160,7 +161,7 @@ Nothing above is claimed as working anywhere in the product or documentation.
 
 | Item | State |
 | --- | --- |
-| GitHub App | Not registered — see B-02 |
+| GitHub App | Client + `GitHubRepositorySource` implemented and tested against a fake; App itself not registered — see B-02 |
 | Repository authorization | Not established |
 | Branch/PR delivery | Not implemented (Phase 8) |
 | Merge detection | Not implemented (C8-06) |
@@ -416,3 +417,67 @@ implying tools work.
 
 **Next intended task:** Phase 3, C3-01 — the secret filter's path-exclusion
 half, then the GitHub App client and the deterministic repository indexer.
+
+### 2026-09-10 — Phase 3, GitHub + safe repository ingestion
+
+**What was built:** The secret filter's path-exclusion half, the
+`RepositorySource` protocol with boundary enforcement, a local development
+adapter and a GitHub-backed source behind one conformance suite, the
+deterministic indexer (Python AST, TS/JS heuristics, manifest parsing), bounded
+context retrieval, and the scan worker.
+
+**The central guarantee is now real:** a repository is never dumped into a
+model. Everything a model sees is selected from the index by `retrieval.py`
+under `CONTEXT_BUDGET_BYTES`, symbol-scoped, secret-filtered, and carrying
+`Evidence` with a file path and line span.
+
+**Key decisions:**
+- Paths are normalized *before* resolution, then resolved and proven inside the
+  root — which is what catches a symlink whose name is innocent but whose target
+  is not. Percent-encoded traversal is treated as a literal filename: decoding
+  it would create the vulnerability it resembles.
+- Sources record what they pruned. Without that, the scan summary would report
+  zero secrets excluded and understate a control that is working.
+- TS/JS analysis is regex-based and every result carries `heuristic=True`. A
+  real parse needs the TypeScript compiler — a Node subprocess per file — and
+  that trade is recorded rather than hidden.
+- Webhook detection requires three signals together. A two-signal version
+  matching `ast.dump()` substrings flagged five handlers in Continuity's own
+  backend, including the detector itself.
+- The GitHub source loads eagerly because the protocol is synchronous and the
+  API is not. Excluded paths are filtered before any content request, so a
+  `.env` is never transferred.
+
+**Review took four passes.** Rounds 1–2 found scope silently unmet: no
+GitHub-backed `RepositorySource` existed despite C3-03 requiring a shared
+conformance suite, and `03_SECURITY_ACCESS.md` §2 promised honouring the
+repository's own `.gitignore` secret rules, which was never implemented. Both
+were built rather than descoped.
+
+Rounds 3–4 were both about one function. `.gitignore` trigger words were matched
+as substrings, so `monkey/` ("key") and `designtokens/` ("token") were adopted
+as secret rules and those directories vanished from analysis entirely. Fixing
+that with whole-token matching then broke the other direction: `authToken.json`
+stopped being adopted, because splitting on non-alphanumerics never decomposes
+camelCase. The final tokenizer handles separators, underscores, and case
+transitions, and is Unicode-aware — an ASCII-only split tore `envío/` into
+`{env, o}` and matched a trigger token from the wreckage.
+
+**The asymmetry worth remembering:** a secret wrongly *included* is redacted
+downstream; a source directory wrongly *excluded* is never indexed, never
+retrieved, never analysed — the product silently ignores part of the codebase.
+Both failure modes now have regression tests naming the exact inputs that broke.
+
+**Do not accidentally change:**
+- `_tokenize` in `secret_filter.py`. Both directions are locked by tests naming
+  real inputs; loosening or tightening it will break one of them.
+- The one accepted ambiguity: `design-tokens/` IS adopted, because it is
+  lexically indistinguishable from `auth-tokens/`. Documented and asserted, not
+  discovered later.
+- The conformance suite. A boundary rule that holds locally and lapses over
+  GitHub would be invisible until it mattered.
+- `tests/fixtures/expected_index.json`. Regenerate deliberately with
+  `uv run python -m scripts.regenerate_index_snapshot` and read the diff.
+
+**Next intended task:** Phase 4, C4-01 — graph persistence and query layer, then
+deterministic integration extraction and the Integration Mapper agent.

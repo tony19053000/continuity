@@ -40,9 +40,13 @@ packages = ["backend"]
 # ---------------------------------------------------------------------------
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+# Fixture repositories contain their own test files on purpose — the indexer
+# must detect them. They are input data, not this project's tests, and
+# collecting them would run a sample repo's suite as if it were ours.
+norecursedirs = ["tests/fixtures"]
 asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
-addopts = "-q --strict-markers"
+addopts = "-q --strict-markers --ignore=tests/fixtures"
 markers = [
     "requires_bedrock: needs live Amazon Bedrock access (STATUS.md blocker B-01)",
     "requires_github_app: needs a configured GitHub App (blocker B-02)",
@@ -56,6 +60,10 @@ markers = [
 target-version = "py312"
 line-length = 100
 src = ["backend", "tests"]
+# Fixture repositories are *input* to the indexer, not project source. They
+# deliberately contain undefined names and partial code so the analyzers have
+# something realistic to parse; linting them would be meaningless.
+extend-exclude = ["tests/fixtures/"]
 
 [tool.ruff.lint]
 select = [

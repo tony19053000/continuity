@@ -144,6 +144,54 @@ Authorized repository
    ↓ Strands agent / Bedrock model
 ```
 
+### Implementation notes (Phase 3)
+
+- **`RepositorySource` is the only way code is read**, and it enforces the
+  boundary rather than trusting callers. Paths are normalized *before*
+  resolution (absolute, `..`, `~`, drive-qualified and null-byte paths are
+  rejected outright), then resolved and proven to still sit inside the root —
+  which is what catches a symlink whose name is innocent but whose target is
+  not. Percent-encoded traversal (`..%2f..`) is deliberately treated as a
+  literal filename: decoding it would create the vulnerability it resembles,
+  since the filesystem never decodes it either.
+- **Sources record what they pruned.** The walk skips excluded directories for
+  speed, so without `skipped_paths()` the scan summary would report zero
+  secrets excluded — understating a control that is working.
+- **TS/JS analysis is regex-based and flagged as such.** Every result carries
+  `heuristic=True` so nothing downstream treats it as equivalent to the Python
+  AST. A real parse needs the TypeScript compiler, i.e. a Node subprocess per
+  file; that trade is recorded rather than hidden.
+- **Webhook detection requires three signals together** — signature
+  verification, event dispatch, and either a route decorator or a hook-like
+  name. An earlier two-signal version matching `ast.dump()` substrings flagged
+  five handlers in Continuity's own backend, including the detector itself,
+  because "signature" appears in `BadSignature` and "type" inside
+  `account_type`. Names are now matched whole against real identifiers.
+- **Oversized files are skipped by `stat`**, never read to discover they are
+  too large.
+- **The repository's own `.gitignore` contributes secret rules.** A team that
+  ignores `deploy/live-config` is telling us that file holds credentials, and no
+  static pattern list would have guessed it. Only *secret-looking* rules are
+  adopted — taking the whole file would exclude `dist/` as a "secret" and make
+  the count meaningless — and negations (`!`) are never adopted, since they
+  re-include rather than hide. Trigger words are matched as **whole tokens**:
+  a substring version adopted `monkey/` ("key") and `designtokens/` ("token"),
+  excluding ordinary source directories from analysis entirely. That is the
+  damaging direction — a wrongly-excluded file is invisible to the product,
+  where a wrongly-included secret is still redacted downstream. Tokenization
+  handles all three naming styles (separators, underscores, and camelCase), and
+  is Unicode-aware: an ASCII-only split tore `envío/` into `{env, o}` and
+  adopted it. One residual ambiguity is accepted and documented rather than
+  hidden — `design-tokens/` is adopted, because it is lexically indistinguishable
+  from `auth-tokens/`.
+- **Two `RepositorySource` implementations, one conformance suite.**
+  `LocalRepositoryAdapter` (development) and `GitHubRepositorySource` are tested
+  by the same parametrized suite, because a boundary rule that holds locally and
+  lapses over GitHub would be invisible until it mattered. The GitHub source
+  loads eagerly — the protocol is synchronous and the API is not — fetching the
+  tree and the contents the indexer would read anyway, with excluded paths
+  filtered *before* any content request so a `.env` is never transferred.
+
 ### Deterministic index
 
 Built with code, not a model:

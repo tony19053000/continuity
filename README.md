@@ -8,12 +8,13 @@ prepares and validates a safe migration, and delivers a reviewable pull request.
 
 Built on the [Strands Agents SDK](https://strandsagents.com) with Amazon Bedrock.
 
-> **Status: Phases 0–1 of 10 complete (20%).**
-> Anchor documentation, then the backend and frontend foundation: FastAPI app,
-> configuration, 24-table schema with migrations, redacting structured logging,
-> Google sign-in, and a Next.js shell that renders real backend state. The
-> Strands agent runtime begins at Phase 2. See [`STATUS.md`](STATUS.md) for
-> real, current state — it is authoritative, and this line is not.
+> **Status: Phases 0–3 of 10 complete (40%).**
+> Foundation, the Strands agent runtime with deterministic orchestration, and
+> safe repository ingestion: a secret filter, boundary-enforced repository
+> sources, a deterministic index (Python AST, manifests, routes, webhooks), and
+> bounded context retrieval. Provider monitoring begins at Phase 5. See
+> [`STATUS.md`](STATUS.md) for real, current state — it is authoritative, and
+> this line is not.
 
 ---
 
@@ -127,9 +128,11 @@ App are each optional and independent.
 **Verification:**
 
 ```bash
-uv run pytest && uv run ruff check . && uv run mypy backend
-cd apps/web && npm run typecheck && npm run lint && npm run test && npm run build
+./scripts/verify.sh
 ```
+
+Runs every gate check — backend tests, lint, types, migrations, and the full
+frontend suite — and prints one line per check.
 
 ## License
 

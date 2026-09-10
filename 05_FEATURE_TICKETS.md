@@ -365,7 +365,7 @@ cannot appear in any model-bound context.
 **Tests:** `tests/security/test_secret_filter.py` with a fixture per pattern plus
 negative tests guarding against false positives on ordinary code.
 **Security:** Blocking prerequisite for C3-04.
-**Status:** PENDING
+**Status:** DONE
 
 ### C3-02 · GitHub App integration
 **Purpose:** Scoped, least-privilege repository access.
@@ -381,7 +381,7 @@ re-validates the authorization boundary; absent App config yields
 **Tests:** unit tests with a mocked GitHub API; `tests/security/` negative tests
 for the prohibited operations.
 **Security:** Permission set exactly matches `03_SECURITY_ACCESS.md` §3.
-**Status:** PENDING
+**Status:** DONE
 
 ### C3-03 · Local repository adapter
 **Purpose:** Develop and test ingestion without GitHub.
@@ -396,7 +396,7 @@ root are each rejected with a typed error; the adapter satisfies the same
 **Tests:** boundary-escape tests in `tests/security/`; a shared conformance suite
 run against both sources.
 **Security:** Never presented as production GitHub access.
-**Status:** PENDING
+**Status:** DONE
 
 ### C3-04 · Repository indexer
 **Purpose:** Deterministic understanding before any model involvement.
@@ -413,7 +413,7 @@ detected clients, and detected webhooks; excluded paths are never opened
 without being read.
 **Tests:** `tests/integration/test_indexer.py` with fixture repositories.
 **Security:** No content leaves the process.
-**Status:** PENDING
+**Status:** DONE
 
 ### C3-05 · Relevant-context retrieval
 **Purpose:** Send the model slices, never repositories.
@@ -428,7 +428,7 @@ non-null `Evidence` with a file path and line span.
 **Tests:** budget-enforcement, evidence-completeness, and secret-exclusion tests.
 **Security:** A test asserts a secret-bearing fixture cannot appear in retrieved
 context.
-**Status:** PENDING
+**Status:** DONE
 
 ### C3-06 · Scan orchestration and summary
 **Purpose:** Wire ingestion into the run lifecycle.
@@ -443,7 +443,7 @@ content hash.
 **Tests:** integration test over a fixture repository, including the
 read-only hash assertion in `tests/security/`.
 **Security:** Read-only analysis is a security guarantee, not just a behaviour.
-**Status:** PENDING
+**Status:** DONE
 
 ---
 
