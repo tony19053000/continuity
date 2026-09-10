@@ -174,7 +174,7 @@ Nothing above is claimed as working anywhere in the product or documentation.
 | Field | Value |
 | --- | --- |
 | Branch | `main` (tracking `origin/main`) |
-| Latest commit | `cd79204` — docs: establish Continuity product and engineering foundation |
+| Latest commit | `4afb606` — feat: application and backend foundation |
 | Push state | Pushed to `origin/main` successfully |
 
 ---
@@ -348,3 +348,13 @@ grant repository access.
 
 **Next intended task:** Phase 2, C2-01 — the Bedrock model provider abstraction,
 then the Strands agent base and the deterministic tool dispatcher.
+
+**Post-review note (secret fixtures):** GitHub push protection rejected the
+first Phase 1 push because `tests/unit/shared/test_redaction.py` contained
+Slack- and Stripe-shaped literals. They were synthetic, but clicking "allow the
+secret" is the wrong reflex here — and committing scanner-tripping strings
+trains everyone to ignore scan results, which is how a real leak gets missed.
+All such fixtures now live in `tests/support/secret_samples.py` and are
+assembled from parts at import time, so the complete token exists only in
+memory during a test. Import from there rather than pasting a token into a new
+test.
