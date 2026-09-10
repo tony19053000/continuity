@@ -175,7 +175,7 @@ Nothing above is claimed as working beyond what the live tests prove.
 | Field | Value |
 | --- | --- |
 | Branch | `main` (tracking `origin/main`) |
-| Latest commit | `6846bbf` — feat: safe repository ingestion |
+| Latest commit | `88e3e77` — feat: Google Gemini as primary model; external integrations verified live |
 | Push state | Pushed to `origin/main` successfully |
 
 ---
