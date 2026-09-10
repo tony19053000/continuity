@@ -14,7 +14,7 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.models.enums import ChangeType, Confidence, FindingCategory, PolicyDecision, Severity
+from backend.models.enums import ChangeType, FindingCategory, PolicyDecision, Severity
 from backend.models.schemas import Evidence, SourceRef
 
 
@@ -72,20 +72,38 @@ class IntegrationMapperInput(_Contract):
 
 
 class InferredWorkflow(_Contract):
-    name: str
-    basis: str = Field(max_length=500)
-    symbol_keys: list[str]
-    evidence: Evidence
+    """One business workflow the agent believes these symbols implement.
+
+    Evidence is requested as flat fields rather than a nested `Evidence` model,
+    for two reasons. First, Gemini's structured-output schema is an OpenAPI
+    subset that rejects the nested-optional shape `Evidence` has — asking for it
+    made the model fail to produce output at all. Second, the nested model
+    carries `confidence` and `source_ref`, which the agent has no business
+    setting: code fixes confidence to INFERRED and source evidence has no
+    external source. The `Evidence` object is assembled in `mapper.py`.
+    """
+
+    name: str = Field(description="A short business workflow name, e.g. 'Checkout'")
+    basis: str = Field(max_length=500, description="Why these symbols form this workflow")
+    symbol_keys: list[str] = Field(
+        description="Exact symbol keys from the input, formatted 'path::qualified_name'"
+    )
+    evidence_file: str = Field(description="Repository-relative path supporting this")
+    evidence_line_start: int = Field(ge=1, description="First line of the supporting code")
+    evidence_line_end: int = Field(ge=1, description="Last line of the supporting code")
 
 
 class IntegrationMapperOutput(_Contract):
+    """Workflows only.
+
+    An earlier version also asked for `provider_identities`, to "reconcile
+    provider identity". Nothing consumed it and the prompt never requested it —
+    a field that claims a capability the code does not have. Provider identity
+    is better resolved deterministically by the adapter registry in Phase 5
+    than inferred, so the field is gone rather than left as a promise.
+    """
+
     workflows: list[InferredWorkflow]
-    provider_identities: dict[str, str] = Field(
-        default_factory=dict, description="detected package -> canonical provider id"
-    )
-    # Everything this agent contributes is inferred; the deterministic pass owns
-    # what is confirmed. Fixing the value here makes that impossible to forget.
-    confidence: Confidence = Confidence.INFERRED
 
 
 # --- Impact Analyst ------------------------------------------------------

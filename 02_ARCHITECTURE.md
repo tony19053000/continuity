@@ -307,6 +307,30 @@ lives — every provider document stored under §9 carries one, and
 `inferred` means a model proposed it. The distinction is preserved end to end
 and surfaced in the UI. **Inferred data may never be presented as confirmed.**
 
+### Implementation notes (Phase 4)
+
+- **`blast_radius` traverses `COVERED_BY_TEST` forwards.** The extractor writes
+  that edge SYMBOL → TEST, so finding the tests covering a symbol is a forward
+  walk. An earlier version listed it as reverse and silently returned *no tests*
+  for every blast radius — the query looked like it worked while quietly
+  answering "nothing covers this", which would have made every migration skip
+  the tests that matter most.
+- **Baseline seeds from call sites *and* webhook handlers.** A handler reaches
+  its provider through `HANDLES_WEBHOOK_EVENT`, not through a call site, so
+  seeding from call sites alone omits every workflow that only receives events —
+  exactly the case a renamed webhook event breaks.
+- **Webhook event names come from string literals, not call arguments.**
+  `event["type"] == "payment.paid"` puts the name in a comparison, so the Python
+  analyzer records short string constants with their line and enclosing symbol.
+- **Agent contracts avoid `dict[str, str]` and deeply-nested optionals.**
+  Gemini's structured output is an OpenAPI subset with no free-form object keys;
+  asking for a dict made the model fail to produce output at all. Evidence is
+  requested as flat fields and the `Evidence` object is assembled in code, which
+  is better anyway — the agent has no business setting `confidence`.
+- **`callback_handler=None` on every Strands agent.** The default handler prints
+  streaming model output, including reasoning, to stdout — which would violate
+  §16 on every single agent call.
+
 ### Storage
 
 Relational: `graph_nodes` and `graph_edges` tables scoped by

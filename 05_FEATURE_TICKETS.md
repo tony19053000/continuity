@@ -463,7 +463,7 @@ correct transitive workflow-and-test closure, verified against a
 hand-computed expected set.
 **Tests:** unit tests per query method; a graph-fixture correctness test.
 **Security:** Evidence excerpts are secret-filtered before storage.
-**Status:** PENDING
+**Status:** DONE
 
 ### C4-02 · Deterministic integration extraction
 **Purpose:** Derive everything the index can prove, without a model.
@@ -478,7 +478,7 @@ node produced is marked `confirmed`; no model is invoked, asserted by a test tha
 fails if the model provider is touched.
 **Tests:** snapshot tests against fixtures.
 **Security:** Pure local computation.
-**Status:** PENDING
+**Status:** DONE
 
 ### C4-03 · Integration Mapper agent
 **Purpose:** Add the judgment layer the deterministic pass cannot supply.
@@ -493,7 +493,7 @@ test that attempts it; every inferred workflow carries `Evidence`; the agent
 holds no file-write tool.
 **Tests:** contract tests; the confirmed-immutability test.
 **Security:** Repository content reaches the agent only via C3-05 retrieval.
-**Status:** PENDING
+**Status:** DONE
 
 ### C4-04 · Baseline establishment
 **Purpose:** Record what "normal" is, so a change can be detected against it.
@@ -509,7 +509,7 @@ tests → permissions`.
 **Tests:** integration test producing that chain for the fixture repo, plus the
 empty-repository case.
 **Security:** Detected permissions and scopes are recorded, never requested.
-**Status:** PENDING
+**Status:** DONE
 
 ---
 

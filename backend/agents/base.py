@@ -103,7 +103,17 @@ class StrandsAgentRunner:
         prompt: str,
         output_model: type[BaseModel],
     ) -> BaseModel:
-        agent = Agent(model=model, system_prompt=system_prompt, tools=tools)
+        # `callback_handler=None` disables Strands' default handler, which
+        # prints the model's streaming output — including its reasoning — to
+        # stdout. That would violate the rule that raw chain-of-thought is never
+        # displayed or logged (`02_ARCHITECTURE.md` §16), and it would do so on
+        # every single agent call.
+        agent = Agent(
+            model=model,
+            system_prompt=system_prompt,
+            tools=tools,
+            callback_handler=None,
+        )
         result = await agent.invoke_async(prompt, structured_output_model=output_model)
 
         structured = getattr(result, "structured_output", None)

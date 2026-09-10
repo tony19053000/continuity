@@ -7,17 +7,17 @@ message disagrees with it, this file is right and the other is stale.
 
 ## Overall completion
 
-**40%**
+**50%**
 
-Phases 0–3 complete. External integrations are now configured and **verified
-live** (2026-09-11): the primary model moved to Google Gemini through Strands,
-and AWS, the GitHub App, and Google OAuth are all proven working. Three of four
-blockers are resolved; the test suite has **zero skips**.
+Phases 0–4 complete. The Integration Intelligence Graph is real and populated by
+a live model: Gemini infers business workflows over deterministic extraction, and
+`blast_radius` traces a provider change to the files, functions, workflows, and
+tests it reaches. Test suite has **zero skips**.
 
 | Field | Value |
 | --- | --- |
-| Current phase | Phase 4 — Integration Mapper + Intelligence Graph |
-| Current ticket | C4-01 — Graph persistence and query layer |
+| Current phase | Phase 5 — Provider monitoring + Change Scout |
+| Current ticket | C5-01 — ProviderAdapter interface and registry |
 | Last updated | 2026-09-11 |
 
 ---
@@ -30,8 +30,8 @@ blockers are resolved; the test suite has **zero skips**.
 | 1 | Application + backend foundation | 20% | **DONE** — reviewer PASS |
 | 2 | Strands + core orchestration | 30% | **DONE** — reviewer PASS |
 | 3 | GitHub + safe repository ingestion | 40% | **DONE** — reviewer PASS |
-| 4 | Integration Mapper + Intelligence Graph | 50% | IN PROGRESS |
-| 5 | Provider monitoring + Change Scout | 60% | PENDING |
+| 4 | Integration Mapper + Intelligence Graph | 50% | **DONE** — reviewer PASS |
+| 5 | Provider monitoring + Change Scout | 60% | IN PROGRESS |
 | 6 | Execution safety, impact analysis, rehearsal | 70% | PENDING |
 | 7 | Migration Engineer + repair loop | 80% | PENDING |
 | 8 | Security + approval + GitHub PR | 90% | PENDING |
@@ -41,10 +41,10 @@ blockers are resolved; the test suite has **zero skips**.
 
 ## Tickets
 
-**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06
+**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04
 **In progress:** none
-**Next:** C4-01 — Graph persistence and query layer
-**Pending:** C4-01 onward — see `05_FEATURE_TICKETS.md`
+**Next:** C5-01 — ProviderAdapter interface and registry
+**Pending:** C5-01 onward — see `05_FEATURE_TICKETS.md`
 
 ---
 
@@ -107,7 +107,7 @@ the prerequisite is met. `BedrockAgentCoreFullAccess` is attached to the
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **474 passing, 0 skipped** |
+| Python unit + integration | `uv run pytest` | **516 passing, 0 skipped** |
 | Security | `uv run pytest tests/security` | **145 passing** |
 | Frontend unit | `npm run test` | **17 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
@@ -119,6 +119,7 @@ the prerequisite is met. `BedrockAgentCoreFullAccess` is attached to the
 | Migrations | `uv run alembic check` | **In sync** with the models |
 | Live integrations | `uv run pytest tests/integration/test_external_integrations.py` | **9 passing** — AWS, GitHub App, Google OAuth |
 | Live Strands + Gemini | `uv run pytest tests/integration/test_strands_roundtrip.py` | **3 passing** — real tool call proven |
+| Live workflow inference | `uv run pytest tests/integration/test_phase4_live.py` | **3 passing** — Gemini names real workflows |
 
 Counts above are from real runs, not estimates.
 
@@ -553,3 +554,62 @@ by hand is an anecdote, not a verification.
 printed by any script, test, or log path in this change.
 
 **Next intended task:** Phase 4, C4-01 — graph persistence and query layer.
+
+### 2026-09-11 — Phase 4, Integration Intelligence Graph
+
+**What was built:** the graph persistence and query layer, deterministic
+extraction, the Integration Mapper agent pipeline, and baseline establishment.
+Against the fixture repository a live Gemini run produces:
+
+    acmepay (API v1)
+      integration points : 4
+      workflows          : Checkout, Subscription Renewal, Refund Processing,
+                           AcmePay Webhook Handling
+      tests              : tests/test_payments.py
+
+That chain — `Provider → files → functions → workflows → tests → permissions` —
+is the thing the whole product rests on, and it now exists end to end.
+
+**The confirmed/inferred split is the phase's core property.** Extraction
+produces `CONFIRMED` facts from manifests and the AST; the agent produces
+`INFERRED` judgment. Confidence is fixed *by code* — `InferredWorkflow` has no
+confidence field at all, so an agent cannot declare its own output confirmed —
+and `ConfirmedNodeOverwrite` raises if inferred data would replace a confirmed
+node. A model naming a symbol that does not exist has its edge dropped while its
+workflow survives, because the workflow may still be right.
+
+**Bugs found and fixed during the build, each real:**
+- `blast_radius` traversed `COVERED_BY_TEST` in the wrong direction, silently
+  returning *no tests* for every query. It looked like it worked while answering
+  "nothing covers this" — which would have made every migration skip exactly the
+  tests that matter.
+- The baseline seeded only from call sites, so workflows reached only through a
+  webhook handler were invisible — precisely the case a renamed webhook event
+  breaks.
+- Webhook event names live in comparisons (`event["type"] == "payment.paid"`),
+  not call arguments, so the analyzer now records string literals with their
+  line and enclosing symbol.
+- Gemini could not produce `IntegrationMapperOutput` at all: its structured
+  output is an OpenAPI subset with no free-form object keys, and the contract
+  asked for a `dict[str, str]` plus a deeply-nested optional. Contracts now use
+  flat evidence fields and lists of pairs. The agent is asked for judgment, not
+  bookkeeping.
+- Strands' default callback handler prints streaming model output — including
+  reasoning — to stdout. `callback_handler=None` is now set on every agent, or
+  §16 would have been violated on every single call.
+
+**Review found three more:** a `blast_radius` docstring still describing the
+traversal backwards (dangerous, given the bug above); a `provider_identities`
+contract field that was never consumed or prompted for, claiming a capability
+the code lacked; and "every node carries evidence" being true only by
+convention. `evidence` is now a required field with no default, so the guarantee
+is structural.
+
+**Do not accidentally change:**
+- `_FORWARD_EDGES` membership. `COVERED_BY_TEST` is written SYMBOL → TEST and
+  must be traversed forwards.
+- The rule that code, never the agent, sets `Confidence.INFERRED`.
+- `NodeSpec.evidence` / `EdgeSpec.evidence` having no default.
+
+**Next intended task:** Phase 5, C5-01 — the `ProviderAdapter` interface and
+registry, then provider monitoring and the Change Scout.

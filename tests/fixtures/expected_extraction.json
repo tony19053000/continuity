@@ -1,0 +1,403 @@
+{
+  "edges": [
+    {
+      "attributes": {
+        "resource": "/v1/charges"
+      },
+      "confidence": "confirmed",
+      "kind": "calls_provider",
+      "source": "call_site:app/services/payment_service.py:11:client.post",
+      "target": "provider:acmepay"
+    },
+    {
+      "attributes": {
+        "resource": "/v1/subscriptions/renew"
+      },
+      "confidence": "confirmed",
+      "kind": "calls_provider",
+      "source": "call_site:app/services/payment_service.py:16:client.post",
+      "target": "provider:acmepay"
+    },
+    {
+      "attributes": {
+        "resource": null
+      },
+      "confidence": "confirmed",
+      "kind": "calls_provider",
+      "source": "call_site:app/services/payment_service.py:20:httpx.post",
+      "target": "provider:acmepay"
+    },
+    {
+      "attributes": {
+        "resource": null
+      },
+      "confidence": "confirmed",
+      "kind": "calls_provider",
+      "source": "call_site:app/services/payment_service.py:6:AcmePayClient",
+      "target": "provider:acmepay"
+    },
+    {
+      "attributes": {},
+      "confidence": "confirmed",
+      "kind": "covered_by_test",
+      "source": "symbol:app/services/payment_service.py::create_payment",
+      "target": "test:tests/test_payments.py"
+    },
+    {
+      "attributes": {},
+      "confidence": "confirmed",
+      "kind": "declares_sdk",
+      "source": "provider:acmepay",
+      "target": "sdk:acmepay"
+    },
+    {
+      "attributes": {},
+      "confidence": "confirmed",
+      "kind": "defined_in",
+      "source": "call_site:app/services/payment_service.py:11:client.post",
+      "target": "symbol:app/services/payment_service.py::create_payment"
+    },
+    {
+      "attributes": {},
+      "confidence": "confirmed",
+      "kind": "defined_in",
+      "source": "call_site:app/services/payment_service.py:16:client.post",
+      "target": "symbol:app/services/payment_service.py::renew_subscription"
+    },
+    {
+      "attributes": {},
+      "confidence": "confirmed",
+      "kind": "defined_in",
+      "source": "call_site:app/services/payment_service.py:20:httpx.post",
+      "target": "symbol:app/services/payment_service.py::refund_payment"
+    },
+    {
+      "attributes": {},
+      "confidence": "confirmed",
+      "kind": "defined_in",
+      "source": "symbol:app/checkout.ts::submitCheckout",
+      "target": "file:app/checkout.ts"
+    },
+    {
+      "attributes": {},
+      "confidence": "confirmed",
+      "kind": "defined_in",
+      "source": "symbol:app/routes.py::checkout",
+      "target": "file:app/routes.py"
+    },
+    {
+      "attributes": {},
+      "confidence": "confirmed",
+      "kind": "defined_in",
+      "source": "symbol:app/services/payment_service.py::create_payment",
+      "target": "file:app/services/payment_service.py"
+    },
+    {
+      "attributes": {},
+      "confidence": "confirmed",
+      "kind": "defined_in",
+      "source": "symbol:app/services/payment_service.py::refund_payment",
+      "target": "file:app/services/payment_service.py"
+    },
+    {
+      "attributes": {},
+      "confidence": "confirmed",
+      "kind": "defined_in",
+      "source": "symbol:app/services/payment_service.py::renew_subscription",
+      "target": "file:app/services/payment_service.py"
+    },
+    {
+      "attributes": {},
+      "confidence": "confirmed",
+      "kind": "defined_in",
+      "source": "symbol:app/webhooks.py::handle_acmepay_webhook",
+      "target": "file:app/webhooks.py"
+    },
+    {
+      "attributes": {},
+      "confidence": "confirmed",
+      "kind": "defined_in",
+      "source": "symbol:tests/test_payments.py::test_create_payment_charges_the_customer",
+      "target": "file:tests/test_payments.py"
+    },
+    {
+      "attributes": {
+        "events": [
+          "payment.paid"
+        ]
+      },
+      "confidence": "confirmed",
+      "kind": "handles_webhook_event",
+      "source": "symbol:app/webhooks.py::handle_acmepay_webhook",
+      "target": "provider:acmepay"
+    }
+  ],
+  "nodes": [
+    {
+      "attributes": {
+        "arguments": [
+          "/v1/charges",
+          "json="
+        ],
+        "callee": "client.post",
+        "enclosing_symbol": "create_payment",
+        "line": 11,
+        "resource": "/v1/charges"
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/services/payment_service.py:11:client.post",
+      "kind": "call_site",
+      "label": "client.post (/v1/charges)"
+    },
+    {
+      "attributes": {
+        "arguments": [
+          "/v1/subscriptions/renew",
+          "json="
+        ],
+        "callee": "client.post",
+        "enclosing_symbol": "renew_subscription",
+        "line": 16,
+        "resource": "/v1/subscriptions/renew"
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/services/payment_service.py:16:client.post",
+      "kind": "call_site",
+      "label": "client.post (/v1/subscriptions/renew)"
+    },
+    {
+      "attributes": {
+        "arguments": [],
+        "callee": "httpx.post",
+        "enclosing_symbol": "refund_payment",
+        "line": 20,
+        "resource": null
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/services/payment_service.py:20:httpx.post",
+      "kind": "call_site",
+      "label": "httpx.post"
+    },
+    {
+      "attributes": {
+        "arguments": [
+          "api_version="
+        ],
+        "callee": "AcmePayClient",
+        "enclosing_symbol": null,
+        "line": 6,
+        "resource": null
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/services/payment_service.py:6:AcmePayClient",
+      "kind": "call_site",
+      "label": "AcmePayClient"
+    },
+    {
+      "attributes": {
+        "classification": "source",
+        "content_hash": "71e17504fe7e45a6",
+        "heuristic": true,
+        "language": "typescript"
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/checkout.ts",
+      "kind": "file",
+      "label": "app/checkout.ts"
+    },
+    {
+      "attributes": {
+        "classification": "source",
+        "content_hash": "7fa0924d51e929c5",
+        "heuristic": false,
+        "language": "python"
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/routes.py",
+      "kind": "file",
+      "label": "app/routes.py"
+    },
+    {
+      "attributes": {
+        "classification": "source",
+        "content_hash": "dbdafb32892ff2f0",
+        "heuristic": false,
+        "language": "python"
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/services/payment_service.py",
+      "kind": "file",
+      "label": "app/services/payment_service.py"
+    },
+    {
+      "attributes": {
+        "classification": "source",
+        "content_hash": "e0396eb505f78263",
+        "heuristic": false,
+        "language": "python"
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/webhooks.py",
+      "kind": "file",
+      "label": "app/webhooks.py"
+    },
+    {
+      "attributes": {
+        "classification": "test",
+        "content_hash": "d2dd384519c24990",
+        "heuristic": false,
+        "language": "python"
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "tests/test_payments.py",
+      "kind": "file",
+      "label": "tests/test_payments.py"
+    },
+    {
+      "attributes": {
+        "detected_api_version": "v1",
+        "package": "acmepay"
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "acmepay",
+      "kind": "provider",
+      "label": "acmepay"
+    },
+    {
+      "attributes": {
+        "constraint": ">=2.1",
+        "manifest": "pyproject.toml"
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "acmepay",
+      "kind": "sdk",
+      "label": "acmepay"
+    },
+    {
+      "attributes": {
+        "http_method": null,
+        "is_route": false,
+        "kind": "function",
+        "line_end": 2,
+        "line_start": 2,
+        "route_path": null
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/checkout.ts::submitCheckout",
+      "kind": "symbol",
+      "label": "submitCheckout()"
+    },
+    {
+      "attributes": {
+        "http_method": "POST",
+        "is_route": true,
+        "kind": "async_function",
+        "line_end": 9,
+        "line_start": 8,
+        "route_path": "/checkout"
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/routes.py::checkout",
+      "kind": "symbol",
+      "label": "checkout()"
+    },
+    {
+      "attributes": {
+        "http_method": null,
+        "is_route": false,
+        "kind": "function",
+        "line_end": 11,
+        "line_start": 9,
+        "route_path": null
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/services/payment_service.py::create_payment",
+      "kind": "symbol",
+      "label": "create_payment()"
+    },
+    {
+      "attributes": {
+        "http_method": null,
+        "is_route": false,
+        "kind": "function",
+        "line_end": 20,
+        "line_start": 19,
+        "route_path": null
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/services/payment_service.py::refund_payment",
+      "kind": "symbol",
+      "label": "refund_payment()"
+    },
+    {
+      "attributes": {
+        "http_method": null,
+        "is_route": false,
+        "kind": "function",
+        "line_end": 16,
+        "line_start": 14,
+        "route_path": null
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/services/payment_service.py::renew_subscription",
+      "kind": "symbol",
+      "label": "renew_subscription()"
+    },
+    {
+      "attributes": {
+        "http_method": "POST",
+        "is_route": true,
+        "kind": "async_function",
+        "line_end": 16,
+        "line_start": 9,
+        "route_path": "/webhooks/acmepay"
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "app/webhooks.py::handle_acmepay_webhook",
+      "kind": "symbol",
+      "label": "handle_acmepay_webhook()"
+    },
+    {
+      "attributes": {
+        "http_method": null,
+        "is_route": false,
+        "kind": "function",
+        "line_end": 5,
+        "line_start": 4,
+        "route_path": null
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "tests/test_payments.py::test_create_payment_charges_the_customer",
+      "kind": "symbol",
+      "label": "test_create_payment_charges_the_customer()"
+    },
+    {
+      "attributes": {
+        "selector": "tests/test_payments.py"
+      },
+      "confidence": "confirmed",
+      "has_evidence": true,
+      "key": "tests/test_payments.py",
+      "kind": "test",
+      "label": "tests/test_payments.py"
+    }
+  ]
+}

@@ -147,6 +147,9 @@ class Integration(UUIDPrimaryKey, Timestamps, Base):
     sdk_package: Mapped[str | None] = mapped_column(String(255))
     detected_api_version: Mapped[str | None] = mapped_column(String(64))
     auth_mechanism: Mapped[str | None] = mapped_column(String(64))
+    # How many call sites reach this provider. Surfaced on the Integrations
+    # page ("23 Integration Points") and recomputed on every scan.
+    integration_points: Mapped[int] = mapped_column(Integer, default=0, server_default="0")
     confidence: Mapped[Confidence] = mapped_column(default=Confidence.INFERRED)
     evidence: Mapped[JsonDict | None] = mapped_column()
 

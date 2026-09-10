@@ -92,6 +92,7 @@
       "path": "app/checkout.ts",
       "read_skipped": null,
       "size_bytes": 137,
+      "string_literals": [],
       "symbols": [
         {
           "http_method": null,
@@ -142,6 +143,13 @@
       "path": "app/routes.py",
       "read_skipped": null,
       "size_bytes": 228,
+      "string_literals": [
+        {
+          "enclosing_symbol": "checkout",
+          "line": 7,
+          "value": "/checkout"
+        }
+      ],
       "symbols": [
         {
           "http_method": "POST",
@@ -206,6 +214,63 @@
       "path": "app/services/payment_service.py",
       "read_skipped": null,
       "size_bytes": 663,
+      "string_literals": [
+        {
+          "enclosing_symbol": null,
+          "line": 1,
+          "value": "Payment integration for the commerce API."
+        },
+        {
+          "enclosing_symbol": null,
+          "line": 6,
+          "value": "v1"
+        },
+        {
+          "enclosing_symbol": "create_payment",
+          "line": 10,
+          "value": "Charge a customer for an order. Used by the checkout flow."
+        },
+        {
+          "enclosing_symbol": "create_payment",
+          "line": 11,
+          "value": "/v1/charges"
+        },
+        {
+          "enclosing_symbol": "create_payment",
+          "line": 11,
+          "value": "order"
+        },
+        {
+          "enclosing_symbol": "create_payment",
+          "line": 11,
+          "value": "amount"
+        },
+        {
+          "enclosing_symbol": "renew_subscription",
+          "line": 15,
+          "value": "Renew a subscription at the end of its billing period."
+        },
+        {
+          "enclosing_symbol": "renew_subscription",
+          "line": 16,
+          "value": "/v1/subscriptions/renew"
+        },
+        {
+          "enclosing_symbol": "renew_subscription",
+          "line": 16,
+          "value": "id"
+        },
+        {
+          "enclosing_symbol": "refund_payment",
+          "line": 20,
+          "value": "/v1/charges/"
+        },
+        {
+          "enclosing_symbol": "refund_payment",
+          "line": 20,
+          "value": "/refund"
+        }
+      ],
       "symbols": [
         {
           "http_method": null,
@@ -285,6 +350,53 @@
       "path": "app/webhooks.py",
       "read_skipped": null,
       "size_bytes": 475,
+      "string_literals": [
+        {
+          "enclosing_symbol": null,
+          "line": 1,
+          "value": "Inbound provider webhooks."
+        },
+        {
+          "enclosing_symbol": "handle_acmepay_webhook",
+          "line": 10,
+          "value": "Handle payment lifecycle events from the provider."
+        },
+        {
+          "enclosing_symbol": "handle_acmepay_webhook",
+          "line": 11,
+          "value": "X-Hub-Signature"
+        },
+        {
+          "enclosing_symbol": "handle_acmepay_webhook",
+          "line": 14,
+          "value": "type"
+        },
+        {
+          "enclosing_symbol": "handle_acmepay_webhook",
+          "line": 14,
+          "value": "payment.paid"
+        },
+        {
+          "enclosing_symbol": "handle_acmepay_webhook",
+          "line": 15,
+          "value": "data"
+        },
+        {
+          "enclosing_symbol": "handle_acmepay_webhook",
+          "line": 15,
+          "value": "order"
+        },
+        {
+          "enclosing_symbol": "handle_acmepay_webhook",
+          "line": 16,
+          "value": "ignored"
+        },
+        {
+          "enclosing_symbol": "handle_acmepay_webhook",
+          "line": 8,
+          "value": "/webhooks/acmepay"
+        }
+      ],
       "symbols": [
         {
           "http_method": "POST",
@@ -313,6 +425,7 @@
       "path": "package.json",
       "read_skipped": null,
       "size_bytes": 96,
+      "string_literals": [],
       "symbols": [],
       "webhook_symbols": []
     },
@@ -329,6 +442,7 @@
       "path": "pyproject.toml",
       "read_skipped": null,
       "size_bytes": 170,
+      "string_literals": [],
       "symbols": [],
       "webhook_symbols": []
     },
@@ -356,6 +470,18 @@
       "path": "tests/test_payments.py",
       "read_skipped": null,
       "size_bytes": 165,
+      "string_literals": [
+        {
+          "enclosing_symbol": "test_create_payment_charges_the_customer",
+          "line": 5,
+          "value": "order-1"
+        },
+        {
+          "enclosing_symbol": "test_create_payment_charges_the_customer",
+          "line": 5,
+          "value": "amount"
+        }
+      ],
       "symbols": [
         {
           "http_method": null,

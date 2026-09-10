@@ -22,7 +22,16 @@ SNAPSHOT = ROOT / "tests" / "fixtures" / "expected_index.json"
 
 
 def main() -> None:
-    snapshot = index_to_snapshot(build_index(LocalRepositoryAdapter(FIXTURE)))
+    import shutil
+    import tempfile
+
+    with tempfile.TemporaryDirectory() as raw:
+        # A pristine copy, so a stray artifact — a `__pycache__`, an editor swap
+        # file — cannot bake itself into the committed snapshot.
+        clean = Path(raw) / "sample_repo"
+        shutil.copytree(FIXTURE, clean, ignore=shutil.ignore_patterns("__pycache__"))
+        snapshot = index_to_snapshot(build_index(LocalRepositoryAdapter(clean)))
+
     SNAPSHOT.write_text(json.dumps(snapshot, indent=2, sort_keys=True) + "\n")
     print(f"wrote {SNAPSHOT.relative_to(ROOT)}")
 

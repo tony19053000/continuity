@@ -125,6 +125,13 @@ class IndexedSymbol:
 
 
 @dataclass(frozen=True, slots=True)
+class IndexedStringLiteral:
+    value: str
+    line: int
+    enclosing_symbol: str | None
+
+
+@dataclass(frozen=True, slots=True)
 class IndexedCallSite:
     callee: str
     line: int
@@ -143,6 +150,7 @@ class IndexedFile:
     symbols: list[IndexedSymbol] = field(default_factory=list)
     call_sites: list[IndexedCallSite] = field(default_factory=list)
     imports: list[str] = field(default_factory=list)
+    string_literals: list[IndexedStringLiteral] = field(default_factory=list)
     http_clients: set[str] = field(default_factory=set)
     webhook_symbols: set[str] = field(default_factory=set)
     #: True when facts came from regex rather than a real parse (TS/JS).
@@ -376,6 +384,12 @@ def _apply_python(index: RepositoryIndex, indexed: IndexedFile, content: str) ->
         for c in analysis.calls
     ]
     indexed.imports = sorted({record.module for record in analysis.imports if record.module})
+    indexed.string_literals = [
+        IndexedStringLiteral(
+            value=literal.value, line=literal.line, enclosing_symbol=literal.enclosing_symbol
+        )
+        for literal in analysis.string_literals
+    ]
     indexed.http_clients = set(analysis.http_client_modules)
     indexed.webhook_symbols = set(analysis.webhook_symbols)
 
@@ -424,12 +438,20 @@ def index_to_snapshot(index: RepositoryIndex) -> dict[str, Any]:
                 **{
                     key: value
                     for key, value in asdict(file).items()
-                    if key not in ("symbols", "call_sites", "http_clients", "webhook_symbols")
+                    if key
+                    not in (
+                        "symbols",
+                        "call_sites",
+                        "http_clients",
+                        "webhook_symbols",
+                        "string_literals",
+                    )
                 },
                 "http_clients": sorted(file.http_clients),
                 "webhook_symbols": sorted(file.webhook_symbols),
                 "symbols": [asdict(symbol) for symbol in file.symbols],
                 "call_sites": [asdict(call) for call in file.call_sites],
+                "string_literals": [asdict(literal) for literal in file.string_literals],
             }
             for path, file in sorted(index.files.items())
         },

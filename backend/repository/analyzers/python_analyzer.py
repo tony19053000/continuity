@@ -82,11 +82,27 @@ class CallRecord:
     arguments_preview: tuple[str, ...] = ()
 
 
+@dataclass(frozen=True, slots=True)
+class StringLiteral:
+    """A string constant and where it appears.
+
+    Captured because the values that matter most are often not call arguments.
+    A webhook handler compares `event["type"] == "payment.paid"` — the event
+    name lives in a comparison, and a renamed event is the canonical breaking
+    change this product exists to catch.
+    """
+
+    value: str
+    line: int
+    enclosing_symbol: str | None
+
+
 @dataclass(slots=True)
 class PythonAnalysis:
     imports: list[ImportRecord] = field(default_factory=list)
     symbols: list[SymbolRecord] = field(default_factory=list)
     calls: list[CallRecord] = field(default_factory=list)
+    string_literals: list[StringLiteral] = field(default_factory=list)
     http_client_modules: set[str] = field(default_factory=set)
     webhook_symbols: set[str] = field(default_factory=set)
     parse_error: str | None = None
@@ -172,6 +188,22 @@ class _Visitor(ast.NodeVisitor):
         )
 
     # --- calls ---
+
+    def visit_Constant(self, node: ast.Constant) -> None:
+        """Record short string constants, wherever they appear.
+
+        Bounded to 200 characters and to strings only, so a docstring or an
+        embedded blob does not flood the index.
+        """
+        if isinstance(node.value, str) and 0 < len(node.value) <= 200:
+            self.analysis.string_literals.append(
+                StringLiteral(
+                    value=node.value,
+                    line=node.lineno,
+                    enclosing_symbol=".".join(self._scope) or None,
+                )
+            )
+        self.generic_visit(node)
 
     def visit_Call(self, node: ast.Call) -> None:
         callee = _callee_name(node.func)
