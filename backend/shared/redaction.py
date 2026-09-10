@@ -29,6 +29,12 @@ _PATTERNS: Final[tuple[tuple[str, re.Pattern[str]], ...]] = (
     # GitHub tokens carry a type prefix and a checksummed body.
     ("github_token", re.compile(r"\bgh[pousr]_[A-Za-z0-9]{16,}\b")),
     ("github_pat", re.compile(r"\bgithub_pat_[A-Za-z0-9_]{20,}\b")),
+    # Google API keys: the classic `AIza…` form and the newer `AQ.` form used
+    # by Gemini API keys.
+    ("google_api_key", re.compile(r"\bAIza[0-9A-Za-z_-]{35}\b")),
+    ("gemini_api_key", re.compile(r"\bAQ\.[A-Za-z0-9_-]{20,}\b")),
+    # Google OAuth client secrets.
+    ("google_oauth_secret", re.compile(r"\bGOCSPX-[A-Za-z0-9_-]{20,}\b")),
     # Slack and Stripe live keys.
     ("slack_token", re.compile(r"\bxox[baprs]-[A-Za-z0-9-]{10,}\b")),
     ("stripe_live_key", re.compile(r"\b[rs]k_live_[A-Za-z0-9]{16,}\b")),

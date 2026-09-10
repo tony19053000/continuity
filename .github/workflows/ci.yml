@@ -87,6 +87,7 @@ jobs:
           # silent until it ships.
           if grep -rIl --exclude-dir=cache \
             -e 'SESSION_SECRET' \
+            -e 'GEMINI_API_KEY' \
             -e 'GITHUB_APP_CLIENT_SECRET' \
             -e 'GITHUB_APP_PRIVATE_KEY_PATH' \
             -e 'GITHUB_APP_WEBHOOK_SECRET' \
@@ -113,7 +114,7 @@ jobs:
             exit 1
           fi
           if git ls-files -z | xargs -0 grep -lIE \
-            'AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----' \
+            'AKIA[0-9A-Z]{16}|gh[pousr]_[A-Za-z0-9]{16,}|-----BEGIN [A-Z ]*PRIVATE KEY-----|AQ\.[A-Za-z0-9_-]{30,}|GOCSPX-[A-Za-z0-9_-]{20,}' \
             -- ':!03_SECURITY_ACCESS.md' ':!backend/shared/redaction.py' \
                ':!tests/unit/shared/test_redaction.py' ':!.github/workflows/ci.yml' \
                2>/dev/null; then

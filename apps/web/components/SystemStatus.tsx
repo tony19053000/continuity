@@ -116,9 +116,9 @@ export function SystemStatus() {
           tone={queueTone(health.components.job_queue)}
         />
         <Row
-          label="Amazon Bedrock"
-          value={configuredLabel(health.components.bedrock)}
-          tone={configuredTone(health.components.bedrock)}
+          label="Google Gemini"
+          value={configuredLabel(health.components.gemini)}
+          tone={configuredTone(health.components.gemini)}
         />
         <Row
           label="GitHub App"

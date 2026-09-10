@@ -61,6 +61,71 @@ class RepositoryNotAuthorized(ContinuityError):
 
 
 @dataclass(frozen=True, slots=True)
+class GitHubInstallationInfo:
+    """One installation of the Continuity App."""
+
+    installation_id: int
+    account_login: str
+    account_type: str
+    repository_selection: str
+
+
+def mint_app_jwt(config: GitHubAppConfig) -> str:
+    """Sign a short-lived App JWT with the App private key.
+
+    Module-level rather than a client method because installation *discovery*
+    needs it before any installation id is known — which is the whole point of
+    discovery.
+
+    The token lives for nine minutes (GitHub's ceiling is ten) and is never
+    logged, persisted, or returned to a caller outside this module's own use.
+    """
+    import jwt
+
+    now = int(time.time())
+    payload = {"iat": now - 60, "exp": now + 540, "iss": config.app_id}
+    key = config.private_key_path.read_text()
+    return str(jwt.encode(payload, key, algorithm="RS256"))
+
+
+async def discover_installations(
+    config: GitHubAppConfig, *, http: httpx.AsyncClient | None = None
+) -> list[GitHubInstallationInfo]:
+    """Every installation of this App.
+
+    Read-only, and authenticated with the App JWT rather than an installation
+    token — an installation token cannot enumerate installations, by design.
+    """
+    client = http or httpx.AsyncClient(timeout=30.0)
+    try:
+        response = await client.get(
+            f"{GITHUB_API}/app/installations",
+            headers={
+                "Authorization": f"Bearer {mint_app_jwt(config)}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": API_VERSION,
+            },
+        )
+        if response.status_code >= 400:
+            raise GitHubError(
+                f"Could not list installations ({response.status_code}). "
+                "Check GITHUB_APP_ID and the private key."
+            )
+        return [
+            GitHubInstallationInfo(
+                installation_id=item["id"],
+                account_login=item["account"]["login"],
+                account_type=item["account"].get("type", "unknown"),
+                repository_selection=item.get("repository_selection", "unknown"),
+            )
+            for item in response.json()
+        ]
+    finally:
+        if http is None:
+            await client.aclose()
+
+
+@dataclass(frozen=True, slots=True)
 class GitHubRepository:
     id: int
     owner: str
@@ -101,24 +166,6 @@ class GitHubAppClient:
 
     # --- authentication ---
 
-    def _app_jwt(self) -> str:
-        """Sign a short-lived app JWT with the App private key.
-
-        Imported lazily so the module loads without PyJWT present; the GitHub
-        App is blocker B-02 and the rest of the system must not depend on it.
-        """
-        try:
-            import jwt
-        except ImportError as exc:  # pragma: no cover - optional until B-02 clears
-            raise GitHubError(
-                "PyJWT is required for GitHub App authentication."
-            ) from exc
-
-        now = int(time.time())
-        payload = {"iat": now - 60, "exp": now + 540, "iss": self._config.app_id}
-        key = self._config.private_key_path.read_text()
-        return str(jwt.encode(payload, key, algorithm="RS256"))
-
     async def _installation_token(self) -> str:
         """Mint or reuse an installation token. Never persisted, never logged."""
         if self._token is not None and self._token.usable:
@@ -127,7 +174,7 @@ class GitHubAppClient:
         response = await self._http.post(
             f"{GITHUB_API}/app/installations/{self._installation_id}/access_tokens",
             headers={
-                "Authorization": f"Bearer {self._app_jwt()}",
+                "Authorization": f"Bearer {mint_app_jwt(self._config)}",
                 "Accept": "application/vnd.github+json",
                 "X-GitHub-Api-Version": API_VERSION,
             },

@@ -16,6 +16,8 @@ appear stale.
 | Strands Python package **[V]** | `strands-agents` 1.55.1, Apache-2.0, Python ≥3.10 (supports 3.10–3.14) | https://pypi.org/project/strands-agents/ |
 | Strands tools package **[V]** | `strands-agents-tools` | https://strandsagents.com/docs/user-guide/quickstart/python/ |
 | Agent import **[V]** | `from strands import Agent, tool` | https://strandsagents.com/docs/user-guide/quickstart/python/ |
+| Gemini provider import **[V]** | `from strands.models.gemini import GeminiModel` (extra: `strands-agents[gemini]`) | verified against the installed SDK |
+| Gemini model id **[V]** | `model_id` is required — no SDK default. Continuity defaults to `gemini-2.5-flash`, confirmed present in the live `models.list()` | https://ai.google.dev/gemini-api/docs/models |
 | Bedrock provider import **[V]** | `from strands.models import BedrockModel` | https://strandsagents.com/docs/user-guide/concepts/model-providers/amazon-bedrock/ |
 | Bedrock default model **[V]** | `global.anthropic.claude-sonnet-4-6` | https://strandsagents.com/docs/user-guide/concepts/model-providers/amazon-bedrock/ |
 | BedrockModel params **[V]** | `model_id`, `region_name`, `temperature`, `boto_session`, `guardrail_id`, `guardrail_version`, `cache_config` | https://strandsagents.com/docs/user-guide/concepts/model-providers/amazon-bedrock/ |
@@ -34,8 +36,19 @@ React 19.2.8, Tailwind 4, Vitest 5.0.0. Added in Phase 2: `strands-agents`.
 Verified against the installed SDK rather than the docs alone:
 `Agent(model=..., system_prompt=..., tools=[...])`,
 `await agent.invoke_async(prompt, structured_output_model=Model)` →
-`result.structured_output`, and `BedrockModel(model_id=..., region_name=...,
+`result.structured_output`, `GeminiModel(client_args={"api_key": ...},
+model_id=..., params={...})`, and `BedrockModel(model_id=..., region_name=...,
 temperature=...)`.
+
+**The primary model is Google Gemini, not Amazon Bedrock.** Strands remains the
+agent framework; only the model behind it changed. That change touched one class
+and one config group — no agent, contract, prompt, tool, or orchestration test
+needed editing, which is the clearest evidence the provider abstraction was
+worth having.
+
+Amazon Bedrock AgentCore remains the production agent-infrastructure target
+(§17). AgentCore is where agents *run*; it is independent of which model they
+call, so switching the model does not affect that plan.
 
 **Environment management uses `uv`, not `venv`.** This machine's Python has no
 `ensurepip`, so `python -m venv` fails and the system interpreter is
@@ -50,10 +63,13 @@ Two dependency pins are deliberate rather than incidental:
 - **`@types/node` ^22.** Vitest 5 requires `^22 || >=24`, and 22 matches the
   Node runtime in use.
 
-**Not available on this machine:** AWS CLI is not installed and `~/.aws` does
-not exist. See `STATUS.md` → Blockers. This does not block Phases 0–1 and
-partially blocks live model calls from Phase 2 onward; the design keeps the
-model provider behind an abstraction so deterministic work continues.
+**External integrations are configured and verified live** (2026-09-11):
+Google Gemini (C2-07 proves a real Strands → Gemini → tool call → tool result →
+response loop), AWS via the `continuity-dev` profile in `us-west-2` (standard
+credential chain; no AWS key is ever stored in Continuity's config), the GitHub
+App `Continuity Integration Agent` (installation discovery, installation token,
+and a real repository read), and Google OAuth (live authorization redirect with
+a matching `redirect_uri`). See `STATUS.md` for what remains open.
 
 ---
 
@@ -64,7 +80,9 @@ model provider behind an abstraction so deterministic work continues.
 | Backend language | Python 3.12 | Matches local toolchain, inside Strands' supported 3.10–3.14 range, and gives first-class AST analysis of Python target repositories via the stdlib `ast` module. |
 | Backend API | FastAPI + Uvicorn | Async-native (agent runs are I/O-bound), Pydantic-native (every agent contract is already a Pydantic model), and OpenAPI generation gives the frontend a typed client for free. |
 | Agent framework | Strands Agents SDK | Mandatory for the hackathon and genuinely the right shape: model-driven agents with typed tools and Pydantic structured output. |
-| Model provider | Amazon Bedrock via `strands.models.BedrockModel` | Primary requirement; wrapped in Continuity's own provider abstraction. |
+| Model provider (primary) | **Google Gemini** via `strands.models.gemini.GeminiModel` | The active model behind Strands. Wrapped in Continuity's own provider abstraction. |
+| Model provider (optional, future) | Amazon Bedrock via `strands.models.BedrockModel` | Retained because the abstraction is already clean and AgentCore remains the production agent-infrastructure target — not because it is in use. |
+| AWS production agent infrastructure | Amazon Bedrock AgentCore | Runtime, Observability, Identity (Phase 8). Independent of which model Strands drives. |
 | Validation | Pydantic v2 | Every agent output, provider change, and API body is a validated model. |
 | Persistence | SQLite (dev) / PostgreSQL (prod) through SQLAlchemy 2.x + Alembic | Relational is the right fit: the Integration Intelligence Graph is a modest edge set best served by indexed joins, and migration runs need transactional state transitions. A graph database is unjustified complexity at this size. |
 | Background execution | In-process async job runner behind a `JobQueue` interface | Simple and testable now; the interface allows an SQS/Step Functions/AgentCore Runtime backend later without touching callers. |
@@ -341,22 +359,32 @@ Agent → validated structured output → deterministic transition → next step
 class ModelProvider(Protocol):
     def build_model(self, role: AgentRole) -> Model: ...
 
-class BedrockModelProvider:
-    """Primary provider. Wraps strands.models.BedrockModel."""
-    def build_model(self, role: AgentRole) -> BedrockModel:
-        return BedrockModel(
-            model_id=settings.bedrock_model_id,      # env: BEDROCK_MODEL_ID
-            region_name=settings.aws_region,          # env: AWS_REGION
-            temperature=ROLE_TEMPERATURE[role],
+class GeminiModelProvider:
+    """Primary provider. Wraps strands.models.gemini.GeminiModel."""
+    def build_model(self, role: AgentRole) -> Model:
+        return GeminiModel(
+            client_args={"api_key": ...},             # env: GEMINI_API_KEY
+            model_id=...,                             # env: GEMINI_MODEL
+            params={"temperature": ROLE_TEMPERATURE[role]},
         )
+
+class BedrockModelProvider:
+    """Optional future provider. Wraps strands.models.BedrockModel."""
 ```
+
+`build_model_provider` selects Gemini when configured and falls back to Bedrock
+only if Gemini is absent *and* Bedrock is present — so a fallback is explicit
+rather than accidental. If neither is configured it raises naming both, because
+a silent stand-in would produce output that looks like agent reasoning but is
+not.
 
 Rules:
 
-- No call site constructs `BedrockModel` directly.
-- `BEDROCK_MODEL_ID` defaults to Strands' documented default
-  (`global.anthropic.claude-sonnet-4-6`) and is overridable by env. The
-  application is never hardwired to one model id.
+- No call site constructs `GeminiModel` or `BedrockModel` directly.
+- `GEMINI_MODEL` defaults to `gemini-2.5-flash` and is overridable by env. The
+  application is never hardwired to one model id. Strands' Gemini provider has
+  no default `model_id` of its own, so Continuity supplies one that was checked
+  against the live model list rather than assumed.
 - Model availability is verified at implementation time, not assumed.
 - If Bedrock is unreachable, the abstraction stays; a clearly-named
   development adapter may be used for deterministic tests only, and must never

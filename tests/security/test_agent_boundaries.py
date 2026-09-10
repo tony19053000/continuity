@@ -61,27 +61,66 @@ def test_no_agent_module_can_reach_the_state_machine(module: Path) -> None:
     assert not offending, f"{module.name} imports the state machine: {offending}"
 
 
+#: Every Strands model class Continuity may construct. Adding a provider means
+#: adding it here — but the import rule below catches one that is forgotten.
+MODEL_CONSTRUCTORS = ("GeminiModel(", "BedrockModel(")
+
+
 @pytest.mark.parametrize("module", _agent_modules(), ids=lambda p: p.name)
 def test_no_agent_module_constructs_a_model_directly(module: Path) -> None:
     """Models come from the provider, never from a call site."""
     source = module.read_text()
 
-    assert "BedrockModel(" not in source, f"{module.name} constructs BedrockModel directly"
+    for constructor in MODEL_CONSTRUCTORS:
+        assert constructor not in source, f"{module.name} constructs {constructor} directly"
 
 
-def test_bedrock_model_is_constructed_in_exactly_one_module() -> None:
-    """C2-01 acceptance.
+@pytest.mark.parametrize("constructor", MODEL_CONSTRUCTORS)
+def test_each_model_class_is_constructed_in_exactly_one_module(constructor: str) -> None:
+    """C2-01 acceptance, for every provider rather than only the first one.
 
-    A model built anywhere else escapes region resolution, the configured model
-    id, and per-role temperature.
+    An earlier version guarded `BedrockModel(` alone. When Gemini became the
+    primary provider, the class actually carrying live traffic was the one left
+    unguarded — so this is parametrized over the list rather than written once.
+
+    A model built anywhere else escapes the configured model id and per-role
+    temperature.
     """
     constructing = [
         path.relative_to(BACKEND).as_posix()
         for path in BACKEND.rglob("*.py")
-        if "BedrockModel(" in path.read_text()
+        if constructor in path.read_text()
     ]
 
-    assert constructing == ["shared/model_provider.py"], constructing
+    assert constructing == ["shared/model_provider.py"], (
+        f"{constructor} is constructed outside the provider: {constructing}"
+    )
+
+
+def test_only_the_provider_module_imports_a_strands_model() -> None:
+    """The rule that cannot go stale.
+
+    `MODEL_CONSTRUCTORS` is an enumeration, and enumerations get forgotten — the
+    Gemini gap above is exactly that failure. This instead asserts that no
+    module *except* the provider may import from `strands.models` at all, so a
+    provider added tomorrow is covered without anyone remembering to list it.
+
+    Known limitation, stated rather than implied: together these two tests catch
+    *accidental* construction — a plausible import, a normal call. They do not
+    catch deliberate obfuscation (a bare `import strands` plus `getattr` chains
+    that never spell the class name). That is a different threat: this guard
+    exists to stop a provider being wired up carelessly, not to defeat someone
+    with commit access who is actively hiding it.
+    """
+    offenders = []
+    for path in BACKEND.rglob("*.py"):
+        relative = path.relative_to(BACKEND).as_posix()
+        if relative == "shared/model_provider.py":
+            continue
+        if any("strands.models" in module for module in _module_imports(path)):
+            offenders.append(relative)
+
+    assert not offenders, f"modules importing a Strands model directly: {offenders}"
 
 
 def test_only_the_migration_engineer_may_write_files() -> None:

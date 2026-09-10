@@ -18,13 +18,18 @@ from __future__ import annotations
 from enum import StrEnum
 from functools import lru_cache
 from pathlib import Path
-from typing import Final, Literal
+from typing import Any, Final, Literal
 
-from pydantic import Field, SecretStr, computed_field
+from pydantic import Field, SecretStr, computed_field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Documented in 02_ARCHITECTURE.md §1: Strands' own default Bedrock model.
-# Overridable via BEDROCK_MODEL_ID; never hardwired at a call site.
+# Primary model. Verified present in the live `models.list()` for this API key
+# and confirmed to drive Strands tool calling end to end (C2-07). Overridable
+# via GEMINI_MODEL; never hardwired at a call site.
+DEFAULT_GEMINI_MODEL: Final = "gemini-2.5-flash"
+
+# Optional future provider. Kept because the abstraction is already clean, not
+# because it is in use — see `02_ARCHITECTURE.md` §2.
 DEFAULT_BEDROCK_MODEL_ID: Final = "global.anthropic.claude-sonnet-4-6"
 
 
@@ -51,6 +56,23 @@ class Environment(StrEnum):
     DEVELOPMENT = "development"
     TEST = "test"
     PRODUCTION = "production"
+
+
+class GeminiConfig:
+    """Resolved Google Gemini configuration.
+
+    The API key is a `SecretStr` and is unwrapped only when the client is
+    constructed, so it cannot be rendered by a repr or a log record.
+    """
+
+    __slots__ = ("api_key", "model")
+
+    def __init__(self, api_key: SecretStr, model: str) -> None:
+        self.api_key = api_key
+        self.model = model
+
+    def __repr__(self) -> str:
+        return f"GeminiConfig(model={self.model!r})"
 
 
 class BedrockConfig:
@@ -123,6 +145,28 @@ class Settings(BaseSettings):
         extra="ignore",
     )
 
+    @model_validator(mode="before")
+    @classmethod
+    def _blank_means_unset(cls, values: Any) -> Any:
+        """Treat an empty value as absent, so the field default applies.
+
+        `.env.example` documents every variable with a blank value, and copying
+        it to `.env` is the documented way to start. Without this, that copy
+        fails at startup on the first non-string field — `AGENTCORE_OBSERVABILITY_ENABLED=`
+        is not a valid boolean, and `PROVIDER_POLL_INTERVAL_SECONDS=` is not a
+        valid int — which makes the documented setup path broken by default.
+
+        A blank line in an env file means "I have not set this", and that is
+        what it now means here.
+        """
+        if not isinstance(values, dict):
+            return values
+        return {
+            key: value
+            for key, value in values.items()
+            if not (isinstance(value, str) and not value.strip())
+        }
+
     # ---- Application -----------------------------------------------------
     CONTINUITY_ENV: Environment = Environment.DEVELOPMENT
     LOG_LEVEL: Literal["DEBUG", "INFO", "WARNING", "ERROR"] = "INFO"
@@ -135,8 +179,17 @@ class Settings(BaseSettings):
     # `database_url`. In production it is required and startup fails without it.
     DATABASE_URL: str = ""
 
-    # ---- AWS / Bedrock ---------------------------------------------------
+    # ---- Primary LLM: Google Gemini via Strands --------------------------
+    GEMINI_API_KEY: SecretStr = SecretStr("")
+    GEMINI_MODEL: str = ""
+
+    # ---- AWS ------------------------------------------------------------
+    # Credentials come from the standard AWS chain (profile, environment, or an
+    # instance/task role). No AWS key ever appears in Continuity's own config.
+    AWS_PROFILE: str = ""
     AWS_REGION: str = ""
+
+    # ---- Optional future model provider: Amazon Bedrock ------------------
     BEDROCK_MODEL_ID: str = ""
 
     # ---- AgentCore (Phase 8) --------------------------------------------
@@ -206,6 +259,16 @@ class Settings(BaseSettings):
                 "required in production so CORS is not guessed",
             )
         return "http://localhost:3000"
+
+    @property
+    def gemini(self) -> GeminiConfig | NotConfigured:
+        """Primary model configuration, or why it is unusable."""
+        if not self.GEMINI_API_KEY.get_secret_value():
+            return NotConfigured("GEMINI_API_KEY is not set")
+        return GeminiConfig(
+            api_key=self.GEMINI_API_KEY,
+            model=self.GEMINI_MODEL or DEFAULT_GEMINI_MODEL,
+        )
 
     @property
     def bedrock(self) -> BedrockConfig | NotConfigured:
@@ -279,6 +342,7 @@ class Settings(BaseSettings):
         return (
             f"Settings(env={self.CONTINUITY_ENV.value}, "
             f"log_level={self.LOG_LEVEL}, "
+            f"gemini={'configured' if self.gemini else 'not_configured'}, "
             f"bedrock={'configured' if self.bedrock else 'not_configured'}, "
             f"github_app={'configured' if self.github_app else 'not_configured'}, "
             f"google_oauth={'configured' if self.google_oauth else 'not_configured'})"

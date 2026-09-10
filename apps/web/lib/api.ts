@@ -83,7 +83,7 @@ export type QueueState = "ok" | "error" | "not_configured";
 
 export interface HealthComponents {
   database: OkState;
-  bedrock: ConfiguredState;
+  gemini: ConfiguredState;
   github_app: ConfiguredState;
   job_queue: QueueState;
 }

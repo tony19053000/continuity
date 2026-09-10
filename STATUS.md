@@ -9,15 +9,16 @@ message disagrees with it, this file is right and the other is stale.
 
 **40%**
 
-Phases 0–3 complete. Phase 3 took four review passes: two findings on scope
-silently unmet, then two on `.gitignore` tokenization — one over-excluding
-ordinary source, one under-filtering real secrets.
+Phases 0–3 complete. External integrations are now configured and **verified
+live** (2026-09-11): the primary model moved to Google Gemini through Strands,
+and AWS, the GitHub App, and Google OAuth are all proven working. Three of four
+blockers are resolved; the test suite has **zero skips**.
 
 | Field | Value |
 | --- | --- |
 | Current phase | Phase 4 — Integration Mapper + Intelligence Graph |
 | Current ticket | C4-01 — Graph persistence and query layer |
-| Last updated | 2026-09-10 |
+| Last updated | 2026-09-11 |
 
 ---
 
@@ -49,60 +50,56 @@ ordinary source, one under-filtering real secrets.
 
 ## Blockers
 
-### B-01 · AWS credentials are not configured on this machine — OPEN
+### B-01 · Live model access — **RESOLVED** (2026-09-11)
 
-**Impact:** Blocks live Amazon Bedrock model calls, and therefore blocks C2-07
-(Strands end-to-end proof) from *passing*, and C8-05 (AgentCore) entirely.
-Does not block Phases 0, 1, or the deterministic majority of 2–7.
+Was: no AWS credentials, so Bedrock was unreachable and C2-07 could only skip.
 
-**Exact state:** `aws` CLI is not installed (`aws: command not found`) and
-`~/.aws` does not exist. No credentials, profile, or region are configured.
+**Resolved by changing the primary model, not by waiting.** Continuity now runs
+on **Google Gemini through Strands** (`strands-agents[gemini]`). C2-07 passes
+live and proves the full loop: Strands Agent → Gemini → tool call → tool result
+→ final structured response. The tool returns a nonce generated fresh each run,
+so the assertion cannot be satisfied by a plausible-sounding answer.
 
-**Resolution:** Install the AWS CLI, configure credentials for an account with
-Amazon Bedrock model access enabled in the target region, and set `AWS_REGION`
-(and optionally `BEDROCK_MODEL_ID`) in `.env`.
+Amazon Bedrock remains implemented as an optional future provider.
 
-**Handling until resolved:** The `ModelProvider` abstraction (C2-01) is built
-regardless. C2-07 skips with an explicit message naming this blocker — it never
-silently passes. No development adapter is ever described as Bedrock.
+### B-02 · GitHub App — **RESOLVED** (2026-09-11)
 
-### B-02 · GitHub App does not exist yet — OPEN
+App `Continuity Integration Agent` (id 4900912) is installed on
+`tony19053000/continuity` with exactly the permissions in
+`03_SECURITY_ACCESS.md` §3.
 
-**Impact:** Blocks C3-02 from live operation and all of C8-03 / C8-06 delivery
-against real repositories.
+Verified live, end to end: RS256 App JWT minting, installation discovery,
+installation token minting, authorized-repository listing, repository metadata
+and file reads, and — importantly — that an *unauthorized* repository is refused
+and an excluded path (`.env`) is refused before any network call.
 
-**Exact state:** No Continuity GitHub App has been registered. `GITHUB_APP_ID`,
-`GITHUB_APP_CLIENT_ID`, `GITHUB_APP_CLIENT_SECRET`,
-`GITHUB_APP_PRIVATE_KEY_PATH`, and `GITHUB_APP_WEBHOOK_SECRET` are unset.
+Continuity has indexed its own repository through the real App: 143 files,
+764 symbols, 7 routes, 1 secret path excluded.
 
-**Resolution:** Register a GitHub App with exactly the permissions in
-`03_SECURITY_ACCESS.md` §3 (Contents: R/W, Pull requests: R/W, Metadata: R,
-Checks: R) and the `pull_request` event subscription, then populate `.env`.
+### B-03 · Google OAuth — **RESOLVED** (2026-09-11)
 
-**Handling until resolved:** `LocalRepositoryAdapter` (C3-03) covers ingestion
-development and testing. Absent config resolves to `NotConfigured`, never a fake
-success.
+Web client configured with redirect URI `http://localhost:8000/auth/callback`.
+Verified live: OIDC discovery, a real authorization redirect to
+`accounts.google.com` whose `client_id` and `redirect_uri` match the registered
+client, the CSRF state cookie, and the refusals (mismatched state → 401, open
+redirect → 422, unauthenticated `/auth/me` and `/auth/logout` → 401).
 
-### B-03 · Google OAuth credentials not configured — OPEN
+Sign-in is verified as far as it can be without a human completing a Google
+consent screen. That last step is a manual check, not an automatable one.
 
-**Impact:** Blocks C1-05 from live sign-in.
-
-**Exact state:** `GOOGLE_OAUTH_CLIENT_ID`, `GOOGLE_OAUTH_CLIENT_SECRET`, and
-`SESSION_SECRET` are unset.
-
-**Resolution:** Create OAuth credentials in Google Cloud Console and populate
-`.env`.
-
-**Handling until resolved:** C1-05 is implemented and unit-tested against the
-flow; live sign-in is deferred. Absent config yields `NotConfigured`.
-
-### B-04 · No TEE / Nitro Enclave infrastructure — OPEN, low priority
+### B-04 · No TEE / Nitro Enclave infrastructure — **OPEN**, low priority
 
 **Impact:** C9-03 cannot deliver hardware-backed attestation.
 
-**Handling:** The `ConfidentialExecutionProvider` abstraction is built and
+**Handling:** the `ConfidentialExecutionProvider` abstraction is built and
 `DevelopmentIsolatedExecutor` remains functional. The UI reports
 `TEE Attestation: Not Configured`. **Attestation is never faked.**
+
+### B-05 · AgentCore not yet provisioned — **OPEN**, expected
+
+Not a regression: AgentCore is Phase 8 (C8-05). AWS access is now verified, so
+the prerequisite is met. `BedrockAgentCoreFullAccess` is attached to the
+`continuity-dev` user.
 
 ---
 
@@ -110,8 +107,8 @@ flow; live sign-in is deferred. Absent config yields `NotConfigured`.
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **462 passing**, 2 skipped (C2-07, blocker B-01) |
-| Security | `uv run pytest tests/security` | **145 passing** — policy, boundaries, secret filter, read-only |
+| Python unit + integration | `uv run pytest` | **474 passing, 0 skipped** |
+| Security | `uv run pytest tests/security` | **145 passing** |
 | Frontend unit | `npm run test` | **17 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
@@ -120,25 +117,28 @@ flow; live sign-in is deferred. Absent config yields `NotConfigured`.
 | Typecheck (web) | `npm run typecheck` | **Passing** |
 | Build (web) | `npm run build` | **Passing** — routes `/`, `/signin` |
 | Migrations | `uv run alembic check` | **In sync** with the models |
+| Live integrations | `uv run pytest tests/integration/test_external_integrations.py` | **9 passing** — AWS, GitHub App, Google OAuth |
+| Live Strands + Gemini | `uv run pytest tests/integration/test_strands_roundtrip.py` | **3 passing** — real tool call proven |
 
 Counts above are from real runs, not estimates.
 
 ---
 
-## AWS / Strands state
+## Model / agent infrastructure state
 
 | Item | State |
 | --- | --- |
-| Strands Agents SDK | **Installed and wired.** `StrandsAgentRunner` drives a real `strands.Agent`. Live path unproven — see B-01 |
-| Amazon Bedrock | **Not configured** — see B-01 |
-| `BEDROCK_MODEL_ID` | Unset; will default to the Strands documented default |
-| `AWS_REGION` | Unset |
-| AgentCore Runtime | Not provisioned (Phase 8, C8-05) |
-| AgentCore Observability | Not provisioned |
-| AgentCore Identity | Not provisioned |
+| Agent framework | **Strands Agents SDK** — unchanged, and the reason the model swap cost one class |
+| Primary model | **Google Gemini** via `strands.models.gemini.GeminiModel` — **live and proven** (C2-07) |
+| `GEMINI_MODEL` | Defaults to `gemini-2.5-flash`, confirmed present in the live model list |
+| Optional future provider | Amazon Bedrock — implemented, not in use |
+| AWS credentials | **Verified** — profile `continuity-dev`, region `us-west-2`, standard chain. No AWS key in `.env` |
+| AgentCore Runtime | Not provisioned — Phase 8 (C8-05), see B-05 |
+| AgentCore Observability | Not provisioned — Phase 8 |
+| AgentCore Identity | Not provisioned — Phase 8 |
 | AgentCore Gateway/Policy | Not provisioned; adoption conditional (§17) |
 
-Nothing above is claimed as working anywhere in the product or documentation.
+Nothing above is claimed as working beyond what the live tests prove.
 
 ---
 
@@ -161,12 +161,12 @@ Nothing above is claimed as working anywhere in the product or documentation.
 
 | Item | State |
 | --- | --- |
-| GitHub App | Client + `GitHubRepositorySource` implemented and tested against a fake; App itself not registered — see B-02 |
-| Repository authorization | Not established |
+| GitHub App | **Installed and verified live** — `Continuity Integration Agent`, app id 4900912 |
+| Repository authorization | **Verified** — `tony19053000/continuity` only; others refused |
 | Branch/PR delivery | Not implemented (Phase 8) |
 | Merge detection | Not implemented (C8-06) |
 | Local `gh` CLI | Authenticated as `tony19053000` |
-| Remote `origin` | `https://github.com/tony19053000/continuity.git` (empty repo) |
+| Remote `origin` | `https://github.com/tony19053000/continuity.git` |
 
 ---
 
@@ -481,3 +481,75 @@ Both failure modes now have regression tests naming the exact inputs that broke.
 
 **Next intended task:** Phase 4, C4-01 — graph persistence and query layer, then
 deterministic integration extraction and the Integration Mapper agent.
+
+### 2026-09-11 — External integrations live; primary model moved to Gemini
+
+**What changed:** the primary model is now **Google Gemini through Strands**
+(`strands-agents[gemini]`), not Amazon Bedrock. Strands remains the agent
+framework — that was the point of the provider abstraction, and the swap proved
+it: one new class (`GeminiModelProvider`) and one config group. **No agent,
+contract, prompt, tool, state machine, or orchestration test changed.**
+
+Amazon Bedrock stays implemented as an optional future provider. Amazon Bedrock
+**AgentCore** remains the production agent-infrastructure target for Phase 8 —
+AgentCore is where agents *run*, which is independent of which model they call.
+
+**Verified live, not asserted:**
+- **Gemini (C2-07).** Proves `Strands Agent → Gemini → tool call → tool result →
+  final structured response`. The tool returns a nonce generated fresh per run,
+  so the assertion cannot be satisfied by a plausible answer. 3 tests.
+- **AWS.** Profile `continuity-dev`, `us-west-2`, resolved through the standard
+  credential chain. A test asserts no AWS key is even a Continuity setting.
+- **GitHub App.** JWT → installation discovery → installation token →
+  authorized-repo listing → metadata → file read. Unauthorized repos and
+  excluded paths are refused. Continuity indexed **its own repository** through
+  the real App: 143 files, 764 symbols, 7 routes, 1 secret path excluded.
+- **Google OAuth.** Live authorization redirect whose `client_id` and
+  `redirect_uri` match the registered client, plus every refusal path.
+
+**Test suite has zero skips.** 474 backend tests, all running. The ad-hoc
+verification scripts were converted into
+`tests/integration/test_external_integrations.py` — a verification that ran once
+by hand is an anecdote, not a verification.
+
+**Incidental fixes this round, each a real defect:**
+- A blank value in `.env` crashed startup on the first non-string field. Copying
+  `.env.example` — the documented way to start — was therefore broken by
+  default. Blank now means "unset", so the field default applies.
+- `/health` reported a `bedrock` component after Gemini became primary. A health
+  page naming a provider the system no longer uses is worse than none, so it is
+  now `gemini`, propagated through the frontend and CI.
+- Redaction learned the Gemini (`AQ.`), Google API (`AIza`), and Google OAuth
+  (`GOCSPX-`) key shapes. It did not know them before, so those secrets would
+  have passed through logs and activity events unredacted.
+- `GitHubAppClient` had no installation *discovery* — it required an
+  installation id it had no way to obtain. Added `mint_app_jwt` and
+  `discover_installations` at module level, since discovery necessarily precedes
+  knowing an installation id.
+- PyJWT was used but undeclared; now `pyjwt[crypto]` is a real dependency.
+- **The model-construction guard only covered Bedrock.** When Gemini became
+  primary, the class carrying live traffic was the one left unguarded — an agent
+  module could have constructed `GeminiModel` directly and no test would have
+  noticed. Found at review. Fixed by parametrizing over every constructor *and*
+  adding a rule that cannot go stale: no module except the provider may import
+  from `strands.models` at all, so a provider added tomorrow is covered without
+  anyone remembering to list it. Both forms are mutation-tested.
+
+  Documented limitation: the pair catches *accidental* construction, not
+  deliberate obfuscation (bare `import strands` plus `getattr` chains). The
+  reviewer found that bypass and judged it a different threat class; it is now
+  stated in the test docstring rather than left as an implicit gap.
+
+**Do not accidentally change:**
+- `build_model_provider`'s ordering. Gemini is primary; Bedrock is used only if
+  Gemini is absent *and* Bedrock is present, so a fallback is explicit rather
+  than accidental. If neither is configured it raises naming both.
+- C2-07's nonce. Replacing it with a fixed string would let a model pass by
+  guessing, and the test would silently stop proving tool use.
+- The `requires_*` pytest markers. They are what let live tests skip honestly in
+  CI without ever implying an integration works.
+
+**Credential hygiene:** `.env` is mode 600 and gitignored. No secret value is
+printed by any script, test, or log path in this change.
+
+**Next intended task:** Phase 4, C4-01 — graph persistence and query layer.

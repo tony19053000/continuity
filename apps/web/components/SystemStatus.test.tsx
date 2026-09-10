@@ -13,7 +13,7 @@ const health = (overrides: Partial<api.Health> = {}): api.Health => ({
   status: "degraded",
   components: {
     database: "ok",
-    bedrock: "not_configured",
+    gemini: "not_configured",
     github_app: "not_configured",
     job_queue: "not_configured",
   },

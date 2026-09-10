@@ -7,7 +7,7 @@ from httpx import AsyncClient
 
 from backend.api.routers.health import HealthComponents, _roll_up
 
-EXPECTED_COMPONENTS = {"database", "bedrock", "github_app", "job_queue"}
+EXPECTED_COMPONENTS = {"database", "gemini", "github_app", "job_queue"}
 
 
 async def test_health_returns_the_documented_shape(client: AsyncClient) -> None:
@@ -32,7 +32,7 @@ async def test_unconfigured_integrations_report_not_configured(client: AsyncClie
     """
     body = (await client.get("/health")).json()
 
-    assert body["components"]["bedrock"] == "not_configured"
+    assert body["components"]["gemini"] == "not_configured"
     assert body["components"]["github_app"] == "not_configured"
     assert body["status"] == "degraded"
 
@@ -41,12 +41,20 @@ async def test_health_leaks_no_configuration_values(client: AsyncClient) -> None
     """The response carries states, never values."""
     raw = (await client.get("/health")).text.lower()
 
-    for forbidden in ("secret", "password", "token", "client_id", "aws_", "database_url"):
+    for forbidden in (
+        "secret",
+        "password",
+        "token",
+        "client_id",
+        "aws_",
+        "database_url",
+        "api_key",
+    ):
         assert forbidden not in raw
 
 
 @pytest.mark.parametrize(
-    ("database", "bedrock", "github_app", "job_queue", "expected"),
+    ("database", "gemini", "github_app", "job_queue", "expected"),
     [
         ("ok", "configured", "configured", "ok", "ok"),
         ("ok", "not_configured", "configured", "ok", "degraded"),
@@ -59,11 +67,11 @@ async def test_health_leaks_no_configuration_values(client: AsyncClient) -> None
     ],
 )
 def test_status_roll_up(
-    database: str, bedrock: str, github_app: str, job_queue: str, expected: str
+    database: str, gemini: str, github_app: str, job_queue: str, expected: str
 ) -> None:
     components = HealthComponents(
         database=database,  # type: ignore[arg-type]
-        bedrock=bedrock,  # type: ignore[arg-type]
+        gemini=gemini,  # type: ignore[arg-type]
         github_app=github_app,  # type: ignore[arg-type]
         job_queue=job_queue,  # type: ignore[arg-type]
     )

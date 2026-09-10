@@ -1,14 +1,25 @@
-"""Amazon Bedrock model provider.
+"""Model providers.
 
 This is the **only** module in the application that constructs a Strands model.
-Everything else asks for one by agent role. A test walks the AST of
-`backend/` and fails if `BedrockModel(` appears anywhere else, because a model
-built at a call site is a model that escapes configuration, region resolution,
-and per-role tuning.
+Everything else asks for one by agent role, because a model built at a call site
+escapes configuration and per-role tuning.
 
-Strands is the agent framework; Bedrock is the model behind it. Keeping the two
-separated here is what lets a future provider be added without touching a single
-agent.
+Two tests in `tests/security/test_agent_boundaries.py` enforce that: one checks
+each known constructor appears only here, and one — the rule that cannot go
+stale — asserts no other module imports from `strands.models` at all. The second
+exists because the first is an enumeration, and an enumeration was exactly what
+went wrong when Gemini arrived: the guard listed `BedrockModel` only, leaving the
+provider actually carrying live traffic unguarded.
+
+**Strands is the agent framework; the model is swappable behind it.** That
+separation is the reason this change was a new class and a config group rather
+than a rewrite: no agent, contract, prompt, or test needed to change when the
+primary model moved from Bedrock to Gemini.
+
+Primary provider: **Google Gemini** (`GeminiModelProvider`).
+Optional future provider: **Amazon Bedrock** (`BedrockModelProvider`) — retained
+because the abstraction is already clean and AgentCore remains the production
+agent infrastructure target, not because it is in use.
 """
 
 from __future__ import annotations
@@ -16,9 +27,10 @@ from __future__ import annotations
 from typing import Protocol, runtime_checkable
 
 from strands.models import BedrockModel, Model
+from strands.models.gemini import GeminiModel
 
 from backend.models.enums import AgentRole
-from backend.shared.config import BedrockConfig, Settings
+from backend.shared.config import BedrockConfig, GeminiConfig, Settings
 from backend.shared.errors import IntegrationNotConfigured
 
 # Temperature per role, chosen for the job rather than uniformly.
@@ -52,8 +64,34 @@ class ModelProvider(Protocol):
     def model_id(self) -> str: ...
 
 
+class GeminiModelProvider:
+    """The primary provider. Wraps `strands.models.gemini.GeminiModel`.
+
+    The API key is unwrapped from its `SecretStr` exactly here, at the point the
+    client is built, and is never stored on the provider — so a provider caught
+    in a traceback or a log record carries nothing sensitive.
+    """
+
+    def __init__(self, config: GeminiConfig) -> None:
+        self._config = config
+
+    @property
+    def model_id(self) -> str:
+        return self._config.model
+
+    def build_model(self, role: AgentRole) -> Model:
+        return GeminiModel(
+            client_args={"api_key": self._config.api_key.get_secret_value()},
+            model_id=self._config.model,
+            params={"temperature": ROLE_TEMPERATURE.get(role, DEFAULT_TEMPERATURE)},
+        )
+
+    def __repr__(self) -> str:
+        return f"GeminiModelProvider(model={self._config.model!r})"
+
+
 class BedrockModelProvider:
-    """The production provider. Wraps `strands.models.BedrockModel`.
+    """Optional future provider. Wraps `strands.models.BedrockModel`.
 
     Holds no credentials: AWS authentication comes from the standard credential
     chain (environment, shared config, or an instance/task role). The only thing
@@ -83,14 +121,23 @@ class BedrockModelProvider:
 
 
 def build_model_provider(settings: Settings) -> ModelProvider:
-    """Resolve the configured provider, or raise naming what is missing.
+    """Resolve the active provider, or raise naming what is missing.
 
-    Raising rather than returning a fallback is deliberate. A silent stand-in
+    Gemini is primary. Bedrock is used only if Gemini is unconfigured *and*
+    Bedrock is, which keeps the fallback explicit rather than accidental.
+
+    Raising rather than returning a stand-in is deliberate. A silent fallback
     would let a run proceed and produce output that looks like agent reasoning
     but is not — exactly the fake-agent behaviour this project forbids.
     """
+    gemini = settings.gemini
+    if isinstance(gemini, GeminiConfig):
+        return GeminiModelProvider(gemini)
+
     bedrock = settings.bedrock
     if isinstance(bedrock, BedrockConfig):
         return BedrockModelProvider(bedrock)
 
-    raise IntegrationNotConfigured("Amazon Bedrock", bedrock.reason)
+    raise IntegrationNotConfigured(
+        "Google Gemini", f"{gemini.reason}; Amazon Bedrock is also unavailable: {bedrock.reason}"
+    )

@@ -95,7 +95,7 @@ and a `/health` endpoint.
 **Acceptance:** `uvicorn` serves the app and the OpenAPI schema generates.
 `/health` returns `{version, status, components}` where `components` covers
 exactly: `database` (`ok` | `error`, from a real connectivity check),
-`bedrock` (`configured` | `not_configured` — configuration presence only, never
+`gemini` (`configured` | `not_configured` — configuration presence only, never
 a live model call), `github_app` (`configured` | `not_configured`), and
 `job_queue` (`ok` | `error`). Overall `status` is `ok` only when every `ok`-class
 component is `ok`; a `not_configured` optional component yields `degraded`, not

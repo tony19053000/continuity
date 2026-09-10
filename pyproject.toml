@@ -7,7 +7,7 @@ license = { file = "LICENSE" }
 requires-python = ">=3.12"
 
 dependencies = [
-    "strands-agents>=1.55",
+    "strands-agents[gemini]>=1.55",
     "fastapi>=0.115",
     "uvicorn[standard]>=0.34",
     "pydantic>=2.10",
@@ -17,6 +17,8 @@ dependencies = [
     "authlib>=1.4",
     "httpx>=0.28",
     "itsdangerous>=2.2",
+    # RS256 App JWTs; the crypto extra pulls `cryptography`.
+    "pyjwt[crypto]>=2.10",
 ]
 
 [project.optional-dependencies]
@@ -48,9 +50,11 @@ asyncio_mode = "auto"
 asyncio_default_fixture_loop_scope = "function"
 addopts = "-q --strict-markers --ignore=tests/fixtures"
 markers = [
-    "requires_bedrock: needs live Amazon Bedrock access (STATUS.md blocker B-01)",
-    "requires_github_app: needs a configured GitHub App (blocker B-02)",
-    "requires_google_oauth: needs Google OAuth credentials (blocker B-03)",
+    "requires_gemini: needs a live Google Gemini API key (primary model)",
+    "requires_bedrock: needs live Amazon Bedrock access (optional future provider)",
+    "requires_github_app: needs a configured GitHub App",
+    "requires_google_oauth: needs Google OAuth credentials",
+    "requires_aws: needs AWS credentials via the standard chain",
 ]
 
 # ---------------------------------------------------------------------------

@@ -4,7 +4,7 @@ Reports exactly the four components named in ticket C1-01 and nothing else. In
 particular it never reveals a configuration *value* — only whether Continuity
 has been told enough to use a given integration.
 
-The `bedrock` and `github_app` checks are deliberately configuration-presence
+The `gemini` and `github_app` checks are deliberately configuration-presence
 only. Making a live model call or a GitHub API call from a health probe would
 cost money, add latency, and turn an unrelated outage into a failing liveness
 check.
@@ -29,7 +29,10 @@ type QueueState = Literal["ok", "error", "not_configured"]
 
 class HealthComponents(BaseModel):
     database: OkState
-    bedrock: ConfiguredState
+    # The primary model provider. Renamed from `bedrock` when Gemini became
+    # primary — a health page naming a provider the system no longer uses is
+    # worse than no health page.
+    gemini: ConfiguredState
     github_app: ConfiguredState
     # Three-valued rather than two: no job runner exists until C2-05, and
     # reporting "ok" for a component that does not exist would be exactly the
@@ -54,7 +57,7 @@ def _roll_up(components: HealthComponents) -> Literal["ok", "degraded", "error"]
     if components.database == "error" or components.job_queue == "error":
         return "error"
     if "not_configured" in (
-        components.bedrock,
+        components.gemini,
         components.github_app,
         components.job_queue,
     ):
@@ -76,7 +79,7 @@ def _job_queue_state() -> QueueState:
 async def build_health(settings: Settings, version: str) -> HealthResponse:
     components = HealthComponents(
         database="ok" if await check_connection() else "error",
-        bedrock="configured" if settings.bedrock else "not_configured",
+        gemini="configured" if settings.gemini else "not_configured",
         github_app="configured" if settings.github_app else "not_configured",
         job_queue=_job_queue_state(),
     )
