@@ -1,0 +1,904 @@
+# 02 — Technical Architecture
+
+**Status:** Phase 0 baseline. Living state — update whenever implementation
+materially changes architecture.
+
+Verified against upstream documentation on 2026-09-10. Facts marked **[V]** were
+confirmed from official sources at that date and must be re-verified if they
+appear stale.
+
+---
+
+## 1. Verified upstream facts
+
+| Fact | Value | Source |
+| --- | --- | --- |
+| Strands Python package **[V]** | `strands-agents` 1.55.1, Apache-2.0, Python ≥3.10 (supports 3.10–3.14) | https://pypi.org/project/strands-agents/ |
+| Strands tools package **[V]** | `strands-agents-tools` | https://strandsagents.com/docs/user-guide/quickstart/python/ |
+| Agent import **[V]** | `from strands import Agent, tool` | https://strandsagents.com/docs/user-guide/quickstart/python/ |
+| Bedrock provider import **[V]** | `from strands.models import BedrockModel` | https://strandsagents.com/docs/user-guide/concepts/model-providers/amazon-bedrock/ |
+| Bedrock default model **[V]** | `global.anthropic.claude-sonnet-4-6` | https://strandsagents.com/docs/user-guide/concepts/model-providers/amazon-bedrock/ |
+| BedrockModel params **[V]** | `model_id`, `region_name`, `temperature`, `boto_session`, `guardrail_id`, `guardrail_version`, `cache_config` | https://strandsagents.com/docs/user-guide/concepts/model-providers/amazon-bedrock/ |
+| Region resolution order **[V]** | explicit `region_name` → boto3 session → `AWS_REGION` → default `us-west-2` | https://strandsagents.com/docs/user-guide/concepts/model-providers/amazon-bedrock/ |
+| Structured output **[V]** | `agent(prompt, structured_output_model=Model)` → `result.structured_output`; async `agent.invoke_async(...)` | https://strandsagents.com/docs/user-guide/concepts/agents/structured-output/ |
+| Async streaming **[V]** | `agent.stream_async(prompt)` yields events | https://strandsagents.com/docs/user-guide/quickstart/python/ |
+| AgentCore SDK **[V]** | `bedrock-agentcore` 1.22.0, Apache-2.0, Python ≥3.10 | https://pypi.org/project/bedrock-agentcore/ |
+| AgentCore GA **[V]** | Generally available since Oct 2025; Runtime, Memory, Gateway, Identity, Observability | https://aws.amazon.com/about-aws/whats-new/2025/10/amazon-bedrock-agentcore-available/ |
+
+Local toolchain confirmed on this machine: Python 3.12.3, Node 22.22.1,
+npm 10.9.4, git 2.43.0, `gh` 2.45.0 authenticated as `tony19053000`.
+
+**Not available on this machine:** AWS CLI is not installed and `~/.aws` does
+not exist. See `STATUS.md` → Blockers. This does not block Phases 0–1 and
+partially blocks live model calls from Phase 2 onward; the design keeps the
+model provider behind an abstraction so deterministic work continues.
+
+---
+
+## 2. Stack decisions
+
+| Layer | Choice | Justification |
+| --- | --- | --- |
+| Backend language | Python 3.12 | Matches local toolchain, inside Strands' supported 3.10–3.14 range, and gives first-class AST analysis of Python target repositories via the stdlib `ast` module. |
+| Backend API | FastAPI + Uvicorn | Async-native (agent runs are I/O-bound), Pydantic-native (every agent contract is already a Pydantic model), and OpenAPI generation gives the frontend a typed client for free. |
+| Agent framework | Strands Agents SDK | Mandatory for the hackathon and genuinely the right shape: model-driven agents with typed tools and Pydantic structured output. |
+| Model provider | Amazon Bedrock via `strands.models.BedrockModel` | Primary requirement; wrapped in Continuity's own provider abstraction. |
+| Validation | Pydantic v2 | Every agent output, provider change, and API body is a validated model. |
+| Persistence | SQLite (dev) / PostgreSQL (prod) through SQLAlchemy 2.x + Alembic | Relational is the right fit: the Integration Intelligence Graph is a modest edge set best served by indexed joins, and migration runs need transactional state transitions. A graph database is unjustified complexity at this size. |
+| Background execution | In-process async job runner behind a `JobQueue` interface | Simple and testable now; the interface allows an SQS/Step Functions/AgentCore Runtime backend later without touching callers. |
+| Frontend | Next.js (App Router) + React + TypeScript + Tailwind CSS | Required stack; App Router for server components on read-heavy dashboard pages. |
+| Frontend tests | Vitest + React Testing Library; Playwright for critical E2E | Matches the stack without overbuilding. |
+| Backend tests | pytest + pytest-asyncio + httpx ASGI transport | Async-first, no live server needed for integration tests. |
+| Lint / types | `ruff` + `mypy` (backend); `eslint` + `tsc` (frontend) | Already the required commands. |
+
+### Rejected dependencies
+
+LangChain, CrewAI, and AutoGen are **not** used. Strands is the primary agent
+framework; introducing a second orchestration layer would duplicate state
+management and obscure where deterministic control actually lives. Any future
+change here requires an explicit architecture amendment.
+
+---
+
+## 3. Repository layout
+
+```
+/
+├── .claude/agents/{coder,reviewer-tester}.md
+├── apps/web/                     # Next.js frontend
+├── backend/
+│   ├── api/                      # FastAPI routers, dependencies, schemas
+│   ├── agents/                   # Strands runtime agents (one module each)
+│   ├── orchestration/            # State machine, run coordinator, job queue
+│   ├── models/                   # SQLAlchemy models + Pydantic domain schemas
+│   ├── providers/                # ProviderAdapter interface + adapters
+│   ├── repository/               # Ingestion, indexing, context retrieval
+│   ├── integrations/             # Integration Intelligence Graph build/query
+│   ├── migrations/               # Migration workspace, patching, repair loop
+│   ├── validation/               # Test discovery, execution, result parsing
+│   ├── security/                 # Secret filter, policy engine, reviewers
+│   ├── approvals/                # Approval state machine + API surface
+│   ├── github/                   # GitHub App auth, branch/PR operations
+│   ├── workers/                  # Job handlers (monitor, scan, migrate)
+│   ├── observability/            # Structured activity events, tracing
+│   └── shared/                   # Config, errors, execution provider, types
+├── tests/{unit,integration,security,fixtures}/
+├── scripts/
+├── 01_PRD.md … 05_FEATURE_TICKETS.md
+├── STATUS.md  CLAUDE.md  README.md  LICENSE
+└── .gitignore  .env.example
+```
+
+### Layering rule
+
+```
+api → orchestration → agents → { providers, repository, integrations,
+                                 migrations, validation, security }
+                    ↘ models ↙
+```
+
+Dependencies point downward only. Specifically:
+
+- `agents/` never performs its own persistence — it returns structured output.
+- `security/` policy enforcement is never imported *into* an agent prompt.
+- `repository/` never imports from `api/`.
+- `shared/` imports nothing from Continuity above it.
+
+---
+
+## 4. Repository understanding pipeline
+
+**Principle: never send an entire repository blindly to the model.**
+
+```
+Authorized repository
+   ↓ boundary enforcement (path confinement to the checkout root)
+   ↓ exclusion filter (.git, venvs, node_modules, .next, dist, build, binaries,
+   ↓                   generated artifacts, oversized files)
+   ↓ secret filter (runs BEFORE any model context is constructed)
+   ↓ deterministic index (file classification, manifests, AST, import graph)
+   ↓ integration extraction (SDK imports, HTTP clients, webhooks, auth config)
+   ↓ relevant-context retrieval (bounded slices, not whole files where possible)
+   ↓ Strands agent / Bedrock model
+```
+
+### Deterministic index
+
+Built with code, not a model:
+
+- **File classification** — source / test / config / manifest / doc / generated
+- **Dependency manifests** — `requirements*.txt`, `pyproject.toml`,
+  `poetry.lock`, `package.json`, `package-lock.json`, `yarn.lock`
+- **Python AST** (stdlib `ast`) — imports, function and class definitions with
+  line spans, decorators, call sites, string literals that look like URLs or
+  API paths
+- **TS/JS** — import graph and call sites
+- **HTTP client detection** — `requests`, `httpx`, `aiohttp`, `urllib`, `fetch`,
+  `axios`
+- **Webhook detection** — route handlers whose bodies verify signatures or
+  switch on an event-type field
+- **Framework detection** — FastAPI, Flask, Django, Express, Next.js
+
+Only after this does anything reach a model, and then only the retrieved slices.
+
+**Benefits:** privacy, lower cost, lower token usage, better context quality,
+predictable scaling, and a security review surface that is actual code rather
+than prompt text.
+
+---
+
+## 5. Integration Intelligence Graph
+
+Continuity must understand more than "the `stripe` package is installed". The
+graph is **real persisted structured data** consumed by the Impact Analyst — not
+decorative frontend text.
+
+```
+Provider → SDK/API → Files → Functions/Services → Business Workflows
+                                                → Tests
+                                                → Permissions/Auth
+```
+
+Example shape:
+
+```
+PaymentProvider
+    ├── payment_service.py
+    │       ├── create_payment()      → Checkout
+    │       └── renew_subscription()  → Subscription Renewal
+    └── webhook_handler.py            → Payment Events
+```
+
+### Node types
+
+| Node | Key fields |
+| --- | --- |
+| `ProviderNode` | `provider_id`, display name, detected SDK package, detected API version, base URL, auth mechanism, confidence |
+| `SdkNode` | package name, version constraint, manifest file, manifest line |
+| `FileNode` | repo-relative path, language, classification, content hash |
+| `SymbolNode` | qualified name, kind (function/method/class/route), file, line span |
+| `CallSiteNode` | file, line, resolved provider operation, HTTP method + path or SDK method |
+| `WorkflowNode` | workflow name, inference basis, confidence |
+| `TestNode` | test file, test id, selector command |
+| `PermissionNode` | scope/permission string, where declared, provider |
+
+### Edge types
+
+`DECLARES_SDK`, `DEFINED_IN`, `CALLS_PROVIDER`, `IMPLEMENTS_WORKFLOW`,
+`COVERED_BY_TEST`, `REQUIRES_PERMISSION`, `HANDLES_WEBHOOK_EVENT`.
+
+### Evidence requirement
+
+Every node and edge carries an `evidence` record:
+
+```python
+class SourceRef(BaseModel):
+    """Where a piece of external information came from."""
+    kind: Literal["openapi_spec", "changelog", "docs", "github_release",
+                  "sdk_registry", "version_endpoint", "api_feed"]
+    url: str | None
+    document_hash: str | None    # content hash of the stored document
+    retrieved_at: datetime | None
+
+class Evidence(BaseModel):
+    kind: Literal["source", "manifest", "provider_spec", "changelog", "test_output"]
+    file_path: str | None        # repo-relative, for repository evidence
+    line_start: int | None
+    line_end: int | None
+    source_ref: SourceRef | None # set for external (provider) evidence
+    excerpt: str | None          # bounded length, secret-filtered
+    confidence: Literal["confirmed", "inferred"]
+```
+
+`Evidence` answers *what supports this claim*. `SourceRef` answers *where that
+came from and when we fetched it*, and is the single place external provenance
+lives — every provider document stored under §9 carries one, and
+`ProviderChange.source` (§10) reuses it rather than defining a parallel model.
+
+`confirmed` means derived deterministically (AST, manifest, spec diff).
+`inferred` means a model proposed it. The distinction is preserved end to end
+and surfaced in the UI. **Inferred data may never be presented as confirmed.**
+
+### Storage
+
+Relational: `graph_nodes` and `graph_edges` tables scoped by
+`(project_id, graph_version)`. Each repository scan writes a new immutable
+`graph_version`; queries read the latest. This gives free history and makes
+"what changed in our integration surface" answerable.
+
+Query methods the Impact Analyst depends on:
+
+```python
+graph.providers(project_id)
+graph.call_sites_for_provider(project_id, provider_id)
+graph.workflows_touching(node_ids)
+graph.tests_covering(node_ids)
+graph.permissions_for_provider(project_id, provider_id)
+graph.blast_radius(call_site_ids)   # transitive workflow + test closure
+```
+
+---
+
+## 6. Strands agent implementation
+
+Strands is the framework, not the model. Bedrock supplies the model.
+
+```
+Amazon Bedrock model
+      ↓
+  Strands Agent
+      ↓
+specialized system prompt + allowed tools + structured output contract
+      ↓
+validated Pydantic output
+      ↓
+deterministic state transition (application code)
+      ↓
+next agent / tool
+```
+
+Agents do **not** chat freely with each other. Every hand-off is:
+
+```
+Agent → validated structured output → deterministic transition → next step
+```
+
+### Model provider abstraction
+
+`backend/shared/model_provider.py`:
+
+```python
+class ModelProvider(Protocol):
+    def build_model(self, role: AgentRole) -> Model: ...
+
+class BedrockModelProvider:
+    """Primary provider. Wraps strands.models.BedrockModel."""
+    def build_model(self, role: AgentRole) -> BedrockModel:
+        return BedrockModel(
+            model_id=settings.bedrock_model_id,      # env: BEDROCK_MODEL_ID
+            region_name=settings.aws_region,          # env: AWS_REGION
+            temperature=ROLE_TEMPERATURE[role],
+        )
+```
+
+Rules:
+
+- No call site constructs `BedrockModel` directly.
+- `BEDROCK_MODEL_ID` defaults to Strands' documented default
+  (`global.anthropic.claude-sonnet-4-6`) and is overridable by env. The
+  application is never hardwired to one model id.
+- Model availability is verified at implementation time, not assumed.
+- If Bedrock is unreachable, the abstraction stays; a clearly-named
+  development adapter may be used for deterministic tests only, and must never
+  be described as Bedrock. See §19.
+
+### Agent contract
+
+Every runtime agent declares:
+
+| Property | Meaning |
+| --- | --- |
+| `role` | enum identifying the agent |
+| `system_prompt` | specialized, versioned, stored in code |
+| `allowed_tools` | explicit allowlist; empty is valid |
+| `input_model` | Pydantic model |
+| `output_model` | Pydantic model passed as `structured_output_model` |
+| `max_attempts` | finite retry budget on malformed output |
+| `on_error` | escalate / fail run / mark degraded |
+
+Malformed structured output is rejected and retried up to `max_attempts`; after
+that the run escalates. It is never coerced or best-effort parsed.
+
+---
+
+## 7. Runtime agents
+
+These are Continuity's product agents — distinct from the Claude Code
+development subagents in `.claude/agents/`.
+
+Seven core agents ship first. They share **one** Bedrock model provider with
+per-role prompts, tools, and output contracts; separate models are not needed
+and would be cost without benefit. Per-role model routing may be added later
+only with justification.
+
+| # | Agent | Purpose | Writes code? |
+| --- | --- | --- | --- |
+| 1 | **Orchestrator** | Coordinates the run, invokes agents, enforces order, retry budgets, and approval pauses | No |
+| 2 | **Change Scout** | Detects and normalizes external provider changes with source evidence | No |
+| 3 | **Integration Mapper** | Builds the Integration Intelligence Graph from the deterministic index | No |
+| 4 | **Impact Analyst** | Decides whether a change actually affects this project; traces blast radius | No |
+| 5 | **Migration Engineer** | Plans and produces the patch; diagnoses validation failures and repairs | Yes — isolated workspace only |
+| 6 | **Validator / Tester** | Runs build and tests, parses failures, produces deterministic evidence | No |
+| 7 | **Security Reviewer** | Reviews the diff; recommends ALLOW/ASK/DENY with structured findings | No |
+
+Deferred until the core seven work:
+
+| # | Agent | Purpose |
+| --- | --- | --- |
+| 8 | **Red-Team Agent** | Attacks the proposed migration (malformed payloads, replayed webhooks, duplicate transactions, expired credentials, retry storms, prompt injection, invalid signatures) |
+| 9 | **Release Guardian** | Post-merge verification against a real environment; recommends — never performs — rollback |
+
+### Critical constraints
+
+- The **Orchestrator does not override security policy.** State transition
+  enforcement lives in deterministic application code
+  (`backend/orchestration/state_machine.py`), not in the Orchestrator's prompt.
+- The **Security Reviewer recommends**; `backend/security/policy.py` decides.
+- The **Change Scout must not invent provider changes.** Every reported change
+  carries a source reference. Deterministic spec diffing produces the change
+  set; the model supplies semantic interpretation only.
+- Only the **Migration Engineer** writes files, and only inside the migration
+  workspace.
+
+### Division of labour: deterministic code vs. model
+
+| Deterministic code | Model |
+| --- | --- |
+| OpenAPI/spec structural diff | Semantic meaning of a changelog entry |
+| AST parsing, import graph, call-site extraction | Inferring business-workflow names |
+| Secret filtering | Explaining why a change matters |
+| Test execution and result parsing | Diagnosing *why* a test failed |
+| Policy ALLOW/ASK/DENY enforcement | Recommending a risk classification |
+| State transitions, retry budgets | Producing the migration patch |
+| Version comparison, deduplication | Judging relevance of a change to code |
+
+If ordinary code can compute it reliably, ordinary code computes it.
+
+---
+
+## 8. Orchestration state machine
+
+Deterministic, persisted, and the single source of truth for run progress. Model
+output never overrides a transition.
+
+This is the authoritative edge list. `ALLOWED_TRANSITIONS` in code must match it
+exactly, edge for edge — the list, not the prose, is the specification.
+
+**Project lifecycle**
+
+| From | To |
+| --- | --- |
+| `PROJECT_CREATED` | `GITHUB_CONNECTED` |
+| `GITHUB_CONNECTED` | `REPOSITORY_SELECTED` |
+| `REPOSITORY_SELECTED` | `INITIAL_SCAN_PENDING` |
+| `INITIAL_SCAN_PENDING` | `INITIAL_SCAN_RUNNING` |
+| `INITIAL_SCAN_RUNNING` | `INITIAL_SCAN_COMPLETE`, `RUN_FAILED` |
+| `INITIAL_SCAN_COMPLETE` | `INTEGRATION_MAPPING_RUNNING` |
+| `INTEGRATION_MAPPING_RUNNING` | `INTEGRATION_MAPPING_COMPLETE`, `RUN_FAILED` |
+| `INTEGRATION_MAPPING_COMPLETE` | `MONITORING_ACTIVE` |
+| `MONITORING_ACTIVE` | `CHANGE_DETECTED`, `INITIAL_SCAN_PENDING` (re-scan) |
+
+**Change evaluation**
+
+| From | To |
+| --- | --- |
+| `CHANGE_DETECTED` | `CHANGE_ANALYSIS_RUNNING` |
+| `CHANGE_ANALYSIS_RUNNING` | `CHANGE_ANALYSIS_COMPLETE`, `RUN_FAILED` |
+| `CHANGE_ANALYSIS_COMPLETE` | `IMPACT_ANALYSIS_RUNNING` |
+| `IMPACT_ANALYSIS_RUNNING` | `CHANGE_IRRELEVANT`, `CHANGE_RELEVANT`, `RUN_FAILED` |
+| `CHANGE_IRRELEVANT` | `MONITORING_ACTIVE` |
+| `CHANGE_RELEVANT` | `REHEARSAL_PENDING` |
+
+**Rehearsal**
+
+| From | To |
+| --- | --- |
+| `REHEARSAL_PENDING` | `REHEARSAL_RUNNING`, `REHEARSAL_UNAVAILABLE` |
+| `REHEARSAL_RUNNING` | `REHEARSAL_CONFIRMED`, `REHEARSAL_FAILED`, `REHEARSAL_UNAVAILABLE` |
+| `REHEARSAL_CONFIRMED` | `MIGRATION_PENDING` |
+| `REHEARSAL_UNAVAILABLE` | `MIGRATION_PENDING` |
+| `REHEARSAL_FAILED` | `HUMAN_REVIEW_REQUIRED`, `MONITORING_ACTIVE` |
+
+`REHEARSAL_UNAVAILABLE` means the provider exposes no usable spec, so the
+incompatibility could not be reproduced. The run continues on impact analysis
+alone, and the missing rehearsal is recorded with a reason. `REHEARSAL_FAILED`
+is different: the rehearsal ran and did *not* reproduce the expected
+incompatibility, which undermines the case for migrating at all — so it
+escalates rather than proceeding.
+
+**Migration and validation**
+
+| From | To |
+| --- | --- |
+| `MIGRATION_PENDING` | `MIGRATION_RUNNING` |
+| `MIGRATION_RUNNING` | `PATCH_READY`, `HUMAN_REVIEW_REQUIRED`, `RUN_FAILED` |
+| `PATCH_READY` | `VALIDATION_RUNNING` |
+| `VALIDATION_RUNNING` | `VALIDATION_PASSED`, `VALIDATION_FAILED`, `RUN_FAILED` |
+| `VALIDATION_FAILED` | `REPAIR_RUNNING`, `HUMAN_REVIEW_REQUIRED` |
+| `REPAIR_RUNNING` | `VALIDATION_RUNNING`, `HUMAN_REVIEW_REQUIRED` |
+| `VALIDATION_PASSED` | `SECURITY_REVIEW_RUNNING` |
+
+`VALIDATION_FAILED → REPAIR_RUNNING` is taken while attempts remain;
+`VALIDATION_FAILED → HUMAN_REVIEW_REQUIRED` when `MAX_REPAIR_ATTEMPTS` is
+exhausted. The branch is decided by application code, not by a model.
+
+**Security and approval**
+
+| From | To |
+| --- | --- |
+| `SECURITY_REVIEW_RUNNING` | `SECURITY_REVIEW_PASSED`, `SECURITY_REVIEW_FAILED`, `APPROVAL_PENDING` |
+| `SECURITY_REVIEW_FAILED` | `REPAIR_RUNNING`, `HUMAN_REVIEW_REQUIRED` |
+| `SECURITY_REVIEW_PASSED` | `FINAL_VALIDATION_RUNNING`, `APPROVAL_PENDING` |
+| `APPROVAL_PENDING` | `APPROVED`, `REJECTED` |
+| `APPROVED` | `FINAL_VALIDATION_RUNNING` |
+| `REJECTED` | `MONITORING_ACTIVE` |
+
+`APPROVAL_PENDING` is entered whenever the policy engine returns ASK — which may
+happen during security review or at any earlier ALLOW/ASK/DENY checkpoint.
+`SECURITY_REVIEW_FAILED` routes back to `REPAIR_RUNNING` so the Migration
+Engineer can address the findings, and escalates when the retry budget is gone.
+
+**Delivery and verification**
+
+| From | To |
+| --- | --- |
+| `FINAL_VALIDATION_RUNNING` | `FINAL_VALIDATION_PASSED`, `VALIDATION_FAILED`, `RUN_FAILED` |
+| `FINAL_VALIDATION_PASSED` | `PR_PENDING` |
+| `PR_PENDING` | `PR_CREATING` |
+| `PR_CREATING` | `PR_CREATED`, `RUN_FAILED` |
+| `PR_CREATED` | `MERGE_WAITING` |
+| `MERGE_WAITING` | `POST_MERGE_VERIFICATION_RUNNING`, `VERIFIED`, `MONITORING_ACTIVE` |
+| `POST_MERGE_VERIFICATION_RUNNING` | `POST_MERGE_VERIFICATION_PASSED`, `POST_MERGE_VERIFICATION_FAILED` |
+| `POST_MERGE_VERIFICATION_PASSED` | `VERIFIED` |
+| `POST_MERGE_VERIFICATION_FAILED` | `HUMAN_REVIEW_REQUIRED` |
+| `VERIFIED` | `MONITORING_ACTIVE` |
+
+`MERGE_WAITING → VERIFIED` is taken when the PR merges and no post-merge
+verification environment is configured — Continuity does not claim verification
+it did not perform, so this transition records `verification: not_configured`.
+`MERGE_WAITING → MONITORING_ACTIVE` covers a PR closed without merging.
+
+Merge detection is covered by §15 and ticket C8-06.
+
+**Escape states**
+
+`HUMAN_REVIEW_REQUIRED` and `RUN_FAILED` are reachable from every non-terminal
+state listed above; the tables name them only where they are the *expected*
+outcome of that step. `HUMAN_REVIEW_REQUIRED` means Continuity stopped
+deliberately and a person must decide; `RUN_FAILED` means the run hit an
+infrastructure or internal error.
+
+| From | To |
+| --- | --- |
+| `HUMAN_REVIEW_REQUIRED` | `MIGRATION_PENDING` (person redirects), `MONITORING_ACTIVE` (person abandons) |
+| `RUN_FAILED` | `MONITORING_ACTIVE` (retry or abandon) |
+
+Terminal-per-run states: `CHANGE_IRRELEVANT`, `REJECTED`, `VERIFIED`,
+`HUMAN_REVIEW_REQUIRED`, `RUN_FAILED`. Each returns the *project* to
+`MONITORING_ACTIVE`; monitoring never stops because one run ended.
+
+Implementation:
+
+```python
+ALLOWED_TRANSITIONS: dict[RunState, frozenset[RunState]] = {...}
+
+def transition(run: Run, to: RunState, *, evidence: TransitionEvidence) -> Run:
+    """Raises IllegalTransition if `to` is not reachable from run.state.
+    Persists the transition with its evidence in one database transaction."""
+```
+
+Every transition is persisted with a timestamp, the actor (agent role or
+`system` or `user`), and its evidence. The run timeline in the UI is a direct
+read of this table — not a reconstruction.
+
+---
+
+## 9. Provider adapter architecture
+
+Continuity is never hardcoded to one provider. Adapters are discovered through a
+registry; adding a provider must not require changing orchestration.
+
+```python
+class ProviderCapability(StrEnum):
+    CURRENT_VERSION = "current_version"
+    VERSION_HISTORY = "version_history"
+    CHANGELOG = "changelog"
+    OPENAPI_SPEC = "openapi_spec"
+    DOCS = "docs"
+    SDK_RELEASES = "sdk_releases"
+    HEALTH_CHECK = "health_check"
+
+class ProviderAdapter(Protocol):
+    provider_id: str
+    capabilities: frozenset[ProviderCapability]
+
+    async def get_identity(self) -> ProviderIdentity: ...
+    async def get_current_version(self) -> ProviderVersion: ...
+    async def get_version_history(self) -> list[ProviderVersion]: ...
+    async def fetch_changelog(self, since: ProviderVersion | None) -> ChangelogDocument: ...
+    async def fetch_openapi_spec(self, version: ProviderVersion) -> OpenApiDocument: ...
+    async def fetch_docs(self, topic: str) -> DocsDocument: ...
+    async def fetch_sdk_release_info(self) -> list[SdkRelease]: ...
+    async def health_check(self) -> ProviderHealth: ...
+```
+
+Rules:
+
+- Callers check `capabilities` before invoking; unsupported capabilities raise
+  `CapabilityNotSupported` rather than returning fabricated data.
+- Every returned document records `retrieved_at`, `source_url`, and
+  `confidence` (`confirmed` vs `inferred`). Adapters never hallucinate provider
+  facts they could not retrieve.
+- Source types supported: OpenAPI documents, version endpoints, changelog
+  pages, GitHub releases, SDK registry metadata, structured API feeds, official
+  documentation.
+- Adapter content is **untrusted external input** (see `03_SECURITY_ACCESS.md`).
+
+Adapters are registered by id, so an externally-built demo provider can plug in
+later by implementing this interface and registering itself — with **no change**
+to Continuity's core logic. Provider monitoring is driven by the scheduler and
+the adapter's own sources; it is never triggered by demo-specific hooks.
+
+---
+
+## 10. Change normalization
+
+```python
+class ProviderChange(BaseModel):
+    provider_id: str
+    old_version: str
+    new_version: str
+    change_type: ChangeType
+    resource: str                      # endpoint path, event name, or scope
+    old_contract: dict | None
+    new_contract: dict | None
+    breaking: bool
+    security_relevant: bool
+    authentication_relevant: bool
+    source: SourceRef
+    evidence: Evidence
+```
+
+### ChangeType, split by derivation
+
+Not every change type can be recovered from a structural spec diff. The split is
+explicit so that ownership is unambiguous: the deterministic differ (C5-03) is
+responsible for the first group, the Change Scout agent (C5-04) for the second.
+
+**Spec-derivable** — produced deterministically by `backend/providers/diff.py`
+whenever both versions expose a machine-readable spec. No model involvement.
+
+`endpoint_removed`, `endpoint_added`, `endpoint_renamed`,
+`request_field_removed`, `request_field_added`, `request_field_required`,
+`response_field_removed`, `response_shape_changed`, `enum_changed`,
+`webhook_event_changed`, `authentication_changed`, `oauth_scope_changed`,
+`header_requirement_changed`, `error_contract_changed`.
+
+`endpoint_renamed` is the one heuristic member of this group: the differ emits a
+removal/addition pair and proposes a rename only above a path-and-schema
+similarity threshold. Below the threshold it stays two separate changes.
+
+**Changelog-derived** — no reliable spec representation; extracted by the Change
+Scout from prose changelogs, release notes, or SDK registry metadata, and always
+carrying a `SourceRef`.
+
+`rate_limit_changed`, `sdk_deprecated`, `api_version_deprecated`,
+`documentation_only`.
+
+**Deterministic first.** When both versions have a spec, the change set comes
+from the structural diff — the model is never asked to compare JSON. The model
+interprets prose, judges severity nuance, and reconciles a changelog entry
+against the spec diff (for example, confirming that a removed endpoint the differ
+found is the one the changelog describes as deprecated). Change events are
+deduplicated by
+`(provider_id, old_version, new_version, change_type, resource)`.
+
+---
+
+## 11. API rehearsal
+
+Before touching user code, Continuity tries to *prove* the incompatibility.
+
+```
+current integration + existing provider contract → expected PASS
+current integration + new provider contract      → expected FAIL
+```
+
+The delta is the evidence that migration is genuinely required. Rehearsal runs
+the affected tests (selected via `graph.tests_covering(...)`) against a
+contract simulation built from the provider spec.
+
+```
+Current contract:  47 / 47 PASS
+New contract:      39 / 47 PASS
+Affected:          Checkout, Subscription Renewal, Webhook Handling
+```
+
+Rehearsal is adapter-based (`RehearsalHarness`) and capability-gated: when a
+provider exposes no usable spec, the run records
+`REHEARSAL_UNAVAILABLE` with a reason and proceeds on impact analysis alone. It
+does not fabricate a rehearsal result, and it is not hardcoded to any specific
+provider.
+
+---
+
+## 12. Migration workspace and repair loop
+
+### Workspace
+
+Migration agents never modify the user's default branch or working tree. Each
+migration gets an isolated workspace — a temporary git worktree or clean
+checkout at a pinned source commit — and records:
+
+`source_commit`, `target_branch`, `files_changed`, `commands_executed`,
+`tests_executed`, `agent_attempts`, `security_findings`, `patch_diff`.
+
+Cleanup is deterministic: workspaces are removed on run completion, failure, and
+process restart (orphan sweep on startup).
+
+### Repair loop
+
+```
+Migration Engineer → patch → Validator
+      ↑                          ↓
+      └── diagnose ── failure evidence   (bounded)
+                                 ↓ pass
+                          Security Review
+```
+
+- `MAX_REPAIR_ATTEMPTS` (default 3, configurable) is enforced in application
+  code, not by the model.
+- Each attempt records: attempt number, failure evidence, diagnosis summary,
+  files modified, tests executed, outcome.
+- On exhaustion the run enters `HUMAN_REVIEW_REQUIRED`. It never loops
+  indefinitely.
+- A failing test may not be deleted or weakened to reach PASS. If the Migration
+  Engineer believes a test itself is invalid, it must say so explicitly; that
+  becomes a review finding, not a silent edit.
+
+---
+
+## 13. Validation
+
+- **Test discovery** — deterministic: detect pytest/vitest/jest configuration
+  from manifests and config files.
+- **Execution** — through `ExecutionProvider` only (see
+  `03_SECURITY_ACCESS.md` §6): timeout, cwd boundary, filtered environment,
+  output caps, cancellation, audit log.
+- **Parsing** — machine-readable output (`--json-report`, JUnit XML) preferred
+  over scraping human output.
+- **Evidence** — pass/fail counts, failing test ids, and captured failure output
+  are persisted; the UI and the PR body read from these records.
+
+Test results are never produced by a model.
+
+---
+
+## 14. Persistence model
+
+Core tables: `users`, `projects`, `repositories`, `github_installations`,
+`integrations`, `graph_nodes`, `graph_edges`, `providers`,
+`provider_baselines`, `provider_specs`, `change_events`, `agent_runs`,
+`agent_steps`, `tool_invocations`, `migration_runs`, `migration_attempts`,
+`test_results`, `security_findings`, `approvals`, `pull_requests`,
+`activity_events`, `audit_events`.
+
+### Migration run schema
+
+```python
+class MigrationRun(BaseModel):
+    id: UUID
+    project_id: UUID
+    change_event_id: UUID
+    provider_id: str
+    from_version: str
+    to_version: str
+    state: RunState
+    workspace_id: str | None
+    source_commit: str
+    target_branch: str | None
+    attempts: list[MigrationAttempt]
+    rehearsal: RehearsalResult | None
+    validation: ValidationResult | None
+    security_review: SecurityReviewResult | None
+    approval: ApprovalRecord | None
+    pull_request: PullRequestRecord | None
+    evidence_report_id: UUID | None
+    created_at: datetime
+    completed_at: datetime | None
+```
+
+```python
+class MigrationAttempt(BaseModel):
+    attempt_number: int
+    plan_summary: str
+    files_changed: list[str]
+    patch_diff: str
+    commands_executed: list[CommandRecord]
+    tests_executed: list[TestSelector]
+    failure_evidence: list[TestFailure]
+    diagnosis_summary: str | None
+    outcome: Literal["passed", "failed", "escalated"]
+```
+
+Approvals are stored explicitly as `PENDING | APPROVED | REJECTED` with actor
+and timestamp. A model can never write an approval record.
+
+---
+
+## 15. Background execution
+
+```python
+class JobQueue(Protocol):
+    async def enqueue(self, job: Job) -> JobId: ...
+    async def cancel(self, job_id: JobId) -> None: ...
+```
+
+Job kinds: `provider_monitor`, `repository_scan`, `integration_map`,
+`change_analysis`, `impact_analysis`, `rehearsal`, `migration`, `validation`,
+`security_review`, `pr_create`, `pr_status_poll`, `post_merge_verify`.
+
+### Merge detection
+
+`MERGE_WAITING` advances only when Continuity learns the PR's outcome. Two
+mechanisms, in order of preference (ticket C8-06):
+
+1. **GitHub App webhook** — the App subscribes to the `pull_request` event
+   (`closed`, with `merged: true|false`). This requires only the Pull requests:
+   Read permission we already hold; the subscription is configured on the App,
+   not per repository. Deliveries are authenticated with
+   `GITHUB_APP_WEBHOOK_SECRET` (HMAC-SHA256 over the raw body, constant-time
+   compared) and are otherwise treated as untrusted input: the payload is used
+   only to *look up* Continuity's own PR record by number and repository id,
+   never as a source of truth about state.
+2. **`pr_status_poll` job** — a fallback for deployments that cannot receive
+   inbound webhooks. Polls the PR state on a backoff schedule until it is merged
+   or closed.
+
+Both paths converge on the same transition, so the state machine does not care
+which delivered the news. When neither is available, the run stays in
+`MERGE_WAITING` and the UI says so — Continuity does not assume a merge.
+
+Development uses an in-process asyncio worker with a database-backed job table
+(so jobs survive restart). Production may swap in SQS + workers, Step Functions,
+or AgentCore Runtime without changing callers.
+
+Provider monitoring runs on a scheduler per provider, independent of any user
+action or demo trigger.
+
+---
+
+## 16. Observability
+
+Structured activity events, persisted and streamed to the UI:
+
+`repository_scan_started`, `integration_detected`,
+`integration_mapping_complete`, `provider_change_detected`,
+`change_classified`, `impact_analysis_started`, `impacted_workflow_detected`,
+`rehearsal_started`, `rehearsal_confirmed`, `migration_started`,
+`patch_generated`, `validation_started`, `validation_failed`, `repair_started`,
+`validation_passed`, `security_review_started`, `approval_required`,
+`approval_received`, `migration_verified`, `pull_request_created`.
+
+Each event carries `run_id`, `actor`, `timestamp`, a concise summary, and an
+evidence reference.
+
+**Raw model chain-of-thought is never persisted, logged, or exposed.** What is
+exposed: task descriptions, tool invocations and their arguments (secret
+filtered), status, durations, errors, result summaries, and verifiable evidence.
+
+Tracing uses OpenTelemetry (already a Strands dependency), exportable to
+CloudWatch via AgentCore Observability.
+
+---
+
+## 17. AgentCore integration
+
+AgentCore is production infrastructure *around* the agent system. Strands
+remains the agent framework. Every AgentCore dependency needs a stated technical
+reason; unavailable features are recorded as blockers, never faked.
+
+| Priority | Service | Reason | Phase |
+| --- | --- | --- | --- |
+| 1 | **Runtime** | Session isolation and long execution windows suit migration runs, which are long-lived and must not share state across tenants. | 8 |
+| 2 | **Observability** | OTEL-compatible CloudWatch dashboards over agent runs, tool calls, failures, and latency — replaces building our own tracing backend. | 8 |
+| 3 | **Identity** | Secure vault storage for provider/GitHub refresh tokens, keeping long-lived credentials out of Continuity's own database. | 8 |
+| 4 | **Gateway / Policy** | Enforces tool access outside the model, reinforcing the deterministic policy layer. | 8, if it demonstrably adds enforcement we do not already have |
+| 5 | **Evaluations** | Systematic agent evaluation once metrics exist. | 9 |
+| 6 | **Memory** | Persistent organizational decisions, e.g. "this team previously rejected `customers.write` for this provider" — genuinely useful, but only after approvals work. | 9, optional |
+| 7 | **Browser / Code Interpreter** | Only if they measurably improve provider-doc inspection or sandboxed execution beyond our own `ExecutionProvider`. | Evaluate in 9 |
+
+---
+
+## 18. Evaluation
+
+Continuity is not evaluated by asking a model "how good was this migration?"
+Every metric is deterministic and traceable to recorded execution:
+
+**Detection** — provider update detection latency; missed updates.
+**Classification** — breaking-change classification accuracy; relevance accuracy
+(against labelled fixtures); unnecessary migration rate (runs started for
+irrelevant changes).
+**Localization** — affected file accuracy; affected workflow accuracy.
+**Execution** — migration success rate; repair iterations per success; build
+success; contract-test success; regression-test success.
+**Safety** — security violations; unauthorized action attempts blocked; correct
+approval escalation rate.
+**Delivery** — PR creation success.
+**Cost** — total execution time, tool calls, token usage.
+
+If an **Integration Health** score is displayed, its formula is documented here
+and every input traces to a stored record. Phase 4 baseline formula:
+
+```
+health = 100
+       − 15 × (relevant unresolved breaking changes)
+       −  5 × (relevant unresolved non-breaking changes)
+       − 20 × (pending high-risk approvals)
+       − coverage_penalty
+
+coverage_penalty = 0                            if total_integration_points == 0
+                 = round(20 × uncovered / total) otherwise
+
+clamped to [0, 100]
+```
+
+where `uncovered` is the number of integration points with no `COVERED_BY_TEST`
+edge and `total` is the number of integration points in the current graph
+version. The coverage term is a proportion, so it is bounded at 20 by
+construction — a project is not punished for being large.
+
+The result is a 0–100 score, rendered with a `%` suffix in the UI. Worked
+example matching `04_FRONTEND_SPEC.md` §3.6: 23 integration points, 5 of them
+untested, one active but non-breaking relevant change, no pending high-risk
+approvals →
+`100 − 5 − round(20 × 5/23) = 100 − 5 − 4 = 91`.
+
+Every input is a stored record: unresolved changes come from `change_events`,
+approvals from `approvals`, and coverage from `graph_edges`. **No score is
+displayed before its inputs are actually recorded** — a project whose graph has
+not been built shows no health value at all rather than a default.
+
+---
+
+## 19. Failure handling for external services
+
+Credentials, account ids, model ids, AgentCore resources, IAM roles, KMS keys,
+and GitHub App secrets are **never invented**.
+
+If Bedrock is unavailable: document the exact blocker in `STATUS.md`, preserve
+the `ModelProvider` abstraction, continue all deterministic work, and use only a
+clearly-labelled development test adapter — never described as Bedrock.
+
+If AgentCore requires manual infrastructure: document the exact setup steps,
+mark the blocker, and continue independent development.
+
+A single blocked cloud feature never halts the project.
+
+---
+
+## 20. Open decisions
+
+Recorded so they are resolved deliberately, not by accident:
+
+1. ~~**Google sign-in mechanism**~~ — **resolved.** Google OAuth 2.0
+   authorization-code flow via Authlib with server-side sessions, kept entirely
+   separate from GitHub App installation authorization. Owned by ticket C1-05 in
+   Phase 1, because the approval guarantee in `03_SECURITY_ACCESS.md` §4 requires
+   a real authenticated user id and cannot be built on a placeholder.
+2. **Postgres cutover point** — SQLite until concurrency demands otherwise;
+   SQLAlchemy + Alembic keep the switch cheap.
+3. **Rehearsal harness depth** — full contract simulation vs. spec-driven
+   assertion checking. Decide in Phase 6 against a real fixture.
+4. **AgentCore Gateway** — adopt only if it adds enforcement beyond
+   `backend/security/policy.py`. Decide in Phase 8.
