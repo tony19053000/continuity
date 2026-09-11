@@ -11,7 +11,7 @@ Two numbers, because one of them hid a real gap before and must not again.
 
 | Measure | Value | What it means |
 | --- | --- | --- |
-| **Tickets delivered** | **89%** | C0-01 … C8-06 and C9-01 are done and reviewer-passed. Five Phase 9 tickets remain. |
+| **Tickets delivered** | **91%** | C0-01 … C8-06, C9-01 and C9-02 are done and reviewer-passed. Four Phase 9 tickets remain. |
 | **End-to-end readiness** | **works, unattended** | A real repository can be imported through the UI and reach a pull request with no database seeding and no human in the loop except where policy demands one. |
 
 Phases 0–8 are complete, and the loop between them is now closed. Continuity
@@ -37,7 +37,7 @@ stored record. Test suite has **zero skips**.
 | Field | Value |
 | --- | --- |
 | Current phase | Phase 9 — Production security + frontend + polish |
-| Current ticket | C9-02 (Release Guardian) — next. C9-01 is done. |
+| Current ticket | C9-05 (evaluation harness) — next. C9-03 (TEE) is deferred by the project owner. |
 | Last updated | 2026-09-12 |
 
 ---
@@ -61,10 +61,10 @@ stored record. Test suite has **zero skips**.
 
 ## Tickets
 
-**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05, C6-01 … C6-04, C7-01 … C7-04, C8-01 … C8-06, C9-01
+**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05, C6-01 … C6-04, C7-01 … C7-04, C8-01 … C8-06, C9-01, C9-02
 **In progress:** none
-**Next:** C9-02 — see `05_FEATURE_TICKETS.md`
-**Pending:** C9-02, C9-03, C9-04, C9-05, C9-06
+**Next:** C9-05 — see `05_FEATURE_TICKETS.md`
+**Pending:** C9-03 (deferred), C9-04, C9-05, C9-06
 
 ---
 
@@ -203,11 +203,12 @@ Functions, or AgentCore Runtime without changing `run_pipeline`.
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **1199 passing, 0 skipped** |
-| Security | `uv run pytest tests/security` | **329 passing** |
+| Python unit + integration | `uv run pytest` | **1269 passing, 0 skipped** |
+| Security | `uv run pytest tests/security` | **342 passing** |
 | Red Team | `uv run pytest tests/unit/security/test_red_team.py` | **38 passing** — one landing and one non-landing fixture per attack class |
+| Release verification | `uv run pytest tests/unit/verification tests/integration/test_release_verification.py` | **44 passing** — manifest validation, the SSRF guard, and the before/after comparison |
 | Frontend unit | `npm run test` | **47 passing** |
-| Product loop (HTTP API in, pull request out) | `uv run pytest tests/integration/test_product_loop.py` | **24 passing** |
+| Product loop (HTTP API in, pull request out) | `uv run pytest tests/integration/test_product_loop.py` | **27 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
 | Typecheck (py) | `uv run mypy backend` | **Passing** (99 source files) |
@@ -1475,3 +1476,89 @@ C9-04 full frontend, C9-05 evaluation harness, C9-06 final gate.
 
 **Next intended task:** C9-02, Release Guardian — post-merge verification against
 a configured environment, with no code path that performs a rollback.
+
+---
+
+### 2026-09-12 — Phase 9, C9-02: the Release Guardian
+
+**What was built:** the answer to a question records cannot answer. Post-merge
+verification already checked that a merge was consistent with the run — right
+branch, right pull request, right version — all of it derivable from what
+Continuity already held. This asks whether the application still works.
+
+It can only ask because the project says what working means. Continuity does not
+know what the code it migrated does, and a check it invented would be the fake
+verification `CLAUDE.md` rule 5 forbids. So the project declares its own in
+`.continuity/verification.json`: a base URL, and synthetic requests with the
+status each should return.
+
+**The comparison is the substance.** The checks run twice — when the pull request
+opens, while the old code is still deployed, and again after the merge. A check
+failing in both is the project's existing problem; only one that passed before
+and fails now is this migration's regression. Without the before-observation the
+Guardian would blame the migration for what was already broken, and a team would
+learn to ignore the reports.
+
+| situation | recorded as | what happens |
+| --- | --- | --- |
+| no manifest | `not_configured` | the run reaches `VERIFIED`, claiming nothing about any deployment |
+| manifest, checks hold | `passed` | `VERIFIED`, baseline advances |
+| manifest, something regressed | `failed` | `POST_MERGE_VERIFICATION_FAILED → HUMAN_REVIEW_REQUIRED`, baseline stays |
+| manifest with a typo | `manifest_invalid` | recorded and reported; it does not hold the merge hostage and it does not read as a pass |
+
+`VerificationResult.scope` is derived rather than asserted, so the claim grows
+only when something was actually checked.
+
+**No rollback, and the test proves the absence.** The Guardian is the one part of
+Continuity with a motive for a destructive action — it is looking at a broken
+deployment and knows which commit caused it. That is exactly why it only
+recommends. `tests/security/test_release_guardian_surface.py` walks the AST of
+all three modules and asserts that no `revert`, `reset`, `force_push`,
+`delete_branch`, or `redeploy` call exists, that none of them writes to a
+repository, and that nothing branches on `rollback_recommended` except to log it.
+
+**The one new risk, and what closes it.** This is the only place Continuity makes
+an outbound request from its own host to an address someone else wrote. It is off
+unless a deployment sets `RELEASE_VERIFICATION_ENABLED`, both observations are
+gated on it, only `GET`/`HEAD`/`POST` can be declared, paths are relative to the
+declared base URL, redirects are not followed, responses are size-capped and
+redacted, and no credential is attached.
+
+**The reviewer failed this once, for a good reason.** The first version validated
+the scheme and nothing else, so a manifest reading
+`"base_url": "http://169.254.169.254"` with a path of
+`/latest/meta-data/iam/security-credentials/` would have had Continuity fetch its
+own instance credentials and excerpt them into an evidence report. Instance
+metadata endpoints are now refused outright and cannot be enabled by any setting;
+loopback, private, and link-local addresses are refused unless
+`RELEASE_VERIFICATION_ALLOW_PRIVATE_HOSTS` says the environment really is
+internal. The host is resolved and checked immediately before the request, not
+only when the manifest is parsed. The residual DNS-rebinding window is documented
+in `03_SECURITY_ACCESS.md` §5 rather than papered over.
+
+The second finding was quieter and just as real: `_changed_files` read
+`file_path` out of the stored security review, and the review had never written
+it. It returned nothing on every real run, so the Guardian was always told the
+migration changed no files. `ReviewFinding.summary_dict()` now records where a
+finding is, which also means a reader of the stored report can follow one to a
+line.
+
+**What is NOT built:** C9-03 confidential execution (deferred by the project
+owner), C9-04 full frontend, C9-05 evaluation harness, C9-06 final gate.
+
+**Do not accidentally change:**
+- `resolve_target` running before the client opens, and the metadata block being
+  unconditional. `RELEASE_VERIFICATION_ALLOW_PRIVATE_HOSTS` must never reach it.
+- The opt-in gating **both** observations. Gating only the post-merge one would
+  leave delivery making outbound requests with the feature switched off.
+- `observe_before_merge` staying wrapped in `deliver()`. A staging host that is
+  down must not refuse a pull request.
+- `already_failing` being reported and not counted as a regression, and
+  `unattributable` failing closed. They are the two halves of not lying about
+  cause.
+- The `environment` callable on `verify_merge` defaulting to the real
+  `verify_environment`. A default of `None` would silently skip verification in
+  production while every test still passed.
+
+**Next intended task:** C9-05, the evaluation harness — every metric in
+`02_ARCHITECTURE.md` §18 computed from stored records over labelled fixtures.

@@ -117,6 +117,33 @@ class DeliveredPullRequest:
     files_changed: int
 
 
+async def _observe_environment(
+    session: AsyncSession,
+    run: MigrationRun,
+    repository: Repository,
+    *,
+    client: GitHubAppClient,
+) -> None:
+    """Record what the environment does while the old code is still deployed.
+
+    C9-02 needs a before to compare the after against, and this is the last
+    moment one can honestly be taken. It is wrapped because a staging host that
+    is down is not a reason to refuse a pull request — the run would then be
+    stuck holding a validated patch over an unrelated outage. A missing
+    observation makes the later comparison weaker, and the Guardian says so
+    rather than guessing.
+    """
+    from backend.workers.post_merge_verify import observe_before_merge
+
+    try:
+        await observe_before_merge(session, run, repository, client=client)
+    except Exception as exc:
+        logger.warning(
+            "continuity.pre_merge_observation_failed",
+            extra={"migration_run_id": str(run.id), "error": type(exc).__name__},
+        )
+
+
 async def check_preconditions(
     session: AsyncSession,
     run: MigrationRun,
@@ -243,6 +270,7 @@ async def deliver(
     await session.flush()
 
     await _record(session, run, delivered)
+    await _observe_environment(session, run, repository, client=client)
 
     logger.info(
         "continuity.pull_request_opened",

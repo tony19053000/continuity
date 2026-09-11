@@ -895,7 +895,12 @@ asserted by a test over the module's public surface.
 **Tests:** healthy, regressed, and unconfigured paths; the no-rollback surface
 test.
 **Security:** A destructive rollback is never automatic.
-**Status:** PENDING
+**Status:** DONE — reviewer PASS (2026-09-12). The project declares its own
+checks in `.continuity/verification.json`; Continuity runs them when the pull
+request opens and again after the merge, and only a check that passed before and
+fails now is a regression. Off unless a deployment sets
+`RELEASE_VERIFICATION_ENABLED`, since it is the one outbound request Continuity
+makes from its own host to an address written in a repository.
 
 ### C9-03 · Confidential execution
 **Purpose:** Honest handling of the TEE story.

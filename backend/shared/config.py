@@ -230,6 +230,16 @@ class Settings(BaseSettings):
     #: because monitoring nobody started is the gap this switch exists to make
     #: visible rather than silent.
     SCHEDULER_ENABLED: bool = True
+    #: C9-02. Off by default, and deliberately: running a project's tests
+    #: inside an isolated workspace and making outbound requests from
+    #: Continuity's own host to a URL written in someone's repository are
+    #: different risks. The second one is a deployment's decision.
+    RELEASE_VERIFICATION_ENABLED: bool = False
+    #: Whether a declared environment may resolve to a private, loopback, or
+    #: link-local address. Off by default: without it, a manifest pointing at
+    #: `169.254.169.254` would read Continuity's own instance credentials.
+    #: Turning it on never permits an instance metadata endpoint.
+    RELEASE_VERIFICATION_ALLOW_PRIVATE_HOSTS: bool = False
     PROVIDER_POLL_INTERVAL_SECONDS: int = Field(default=3600, ge=60)
     PROVIDER_FETCH_TIMEOUT_SECONDS: int = Field(default=30, ge=1)
 

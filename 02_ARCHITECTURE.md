@@ -501,11 +501,29 @@ budget and ending at `HUMAN_REVIEW_REQUIRED` on exhaustion. Refusing is the
 conservative direction and is not authorization: nothing in the Red Team can
 permit a delivery.
 
-Deferred:
+| 9 | **Release Guardian** | Post-merge verification against the environment the project declared; recommends — never performs — rollback | No — none at all |
 
-| # | Agent | Purpose |
-| --- | --- | --- |
-| 9 | **Release Guardian** | Post-merge verification against a real environment; recommends — never performs — rollback |
+The Release Guardian cannot invent a check against someone else's application,
+so the project declares its own in `.continuity/verification.json`: a base URL
+and a list of synthetic requests with the status each should return. Continuity
+runs them **twice** — once when the pull request opens, while the old code is
+still deployed, and once after the merge. The comparison is what makes the
+result mean anything: a check failing in both is the project's existing problem,
+and only a check that passed before and fails now is this migration's
+regression.
+
+Three outcomes, and each is recorded under its own name: `not_configured` (no
+manifest — the run reaches `VERIFIED` claiming nothing about any deployment),
+`passed`, and `failed` (`POST_MERGE_VERIFICATION_FAILED → HUMAN_REVIEW_REQUIRED`,
+and the baseline does not move).
+
+It is the one place Continuity makes an outbound request from its own host to an
+address written in a repository, so it is **off unless a deployment turns it on**
+(`RELEASE_VERIFICATION_ENABLED`, default false), only `GET`/`HEAD`/`POST` can be
+declared, redirects are not followed, responses are size-capped and redacted, and
+no credential is ever attached. **No code path performs a rollback** — the
+Guardian may recommend one and a person performs it, asserted over the modules'
+public surface by `tests/security/test_release_guardian_surface.py`.
 
 ### Critical constraints
 

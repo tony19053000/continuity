@@ -351,6 +351,46 @@ class RedTeamOutput(_Contract):
     summary: str = Field(max_length=2000)
 
 
+# --- Release Guardian ----------------------------------------------------
+
+
+class CheckReport(_Contract):
+    """One synthetic check, before the merge and after it."""
+
+    name: str
+    before_ok: bool
+    after_ok: bool
+    #: `0` when the check never got a response. Not `None`: Gemini's structured
+    #: output rejects an optional field nested inside a list member.
+    after_status: int = 0
+    after_reason: str = Field(default="", max_length=500)
+
+
+class ReleaseGuardianInput(_Contract):
+    provider_id: str
+    from_version: str
+    to_version: str
+    checks: list[CheckReport]
+    changed_files: list[str] = Field(default_factory=list)
+    #: Response bodies, which the deployed application wrote. Untrusted, and
+    #: wrapped as such in the prompt.
+    response_excerpts: list[str] = Field(default_factory=list)
+
+
+class ReleaseGuardianOutput(_Contract):
+    """Advice about a release. Every field is advisory.
+
+    `rollback_recommended` is the whole point of the ticket's constraint: it is
+    a recommendation, and no code path acts on it. A test over the module's
+    public surface asserts that nothing can.
+    """
+
+    regression_summary: str = Field(max_length=2000)
+    likely_related_to_migration: bool
+    rollback_recommended: bool
+    rationale: str = Field(max_length=2000)
+
+
 # --- Orchestrator --------------------------------------------------------
 
 

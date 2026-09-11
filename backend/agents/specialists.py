@@ -1,4 +1,4 @@
-"""The seven specialist runtime agents.
+"""The eight specialist runtime agents.
 
 Each declares a full contract and renders its own prompt. None returns a canned
 result — an agent whose capability is not yet built raises `NotImplementedError`
@@ -27,6 +27,8 @@ from backend.agents.contracts import (
     MigrationEngineerOutput,
     RedTeamInput,
     RedTeamOutput,
+    ReleaseGuardianInput,
+    ReleaseGuardianOutput,
     SecurityReviewerInput,
     SecurityReviewerOutput,
     ValidatorInput,
@@ -377,6 +379,60 @@ probes have already covered some classes; do not repeat those.""",
         )
 
 
+class ReleaseGuardianAgent(
+    ContinuityAgent[ReleaseGuardianInput, ReleaseGuardianOutput]
+):
+    """Reads what the deployed application did after a merge. Recommends only.
+
+    It may recommend a rollback and can never perform one. Nothing in Continuity
+    reverts, resets, force-pushes, or redeploys — a destructive action taken on
+    a model's reading of a failing health check is exactly the kind of autonomy
+    this product refuses.
+    """
+
+    contract = AgentContract(
+        role=AgentRole.RELEASE_GUARDIAN,
+        system_prompt=f"""{_COMMON_RULES}
+
+You are the Release Guardian. A migration has been merged, and a set of
+synthetic checks the project declared has been run against its environment
+before and after. You are given the results of both.
+
+Your job is to say whether what broke is plausibly the migration's doing. A
+check that was already failing before the merge is not a regression; a check
+that passed before and fails now is. Say which, and say when you cannot tell.
+
+You may recommend a rollback. You cannot perform one, and nothing acts on your
+recommendation automatically — a person reads it. Recommend it only when the
+evidence supports it.""",
+        allowed_tools=frozenset(),
+        input_model=ReleaseGuardianInput,
+        output_model=ReleaseGuardianOutput,
+        max_attempts=2,
+    )
+
+    def build_prompt(self, task: ReleaseGuardianInput) -> str:
+        rows = "\n".join(
+            f"- {check.name}: before={'ok' if check.before_ok else 'failing'}, "
+            f"after={'ok' if check.after_ok else 'failing'}"
+            + (f" ({check.after_reason})" if check.after_reason else "")
+            for check in task.checks
+        )
+        parts = [
+            f"Provider: {task.provider_id} {task.from_version} -> {task.to_version}",
+            "Files the migration changed:\n"
+            + ("\n".join(f"- {path}" for path in task.changed_files) or "- none"),
+            "Checks:\n" + (rows or "- none"),
+        ]
+        for index, excerpt in enumerate(task.response_excerpts):
+            parts.append(untrusted_block(f"response_{index}", excerpt))
+        parts.append(
+            "Say what regressed, whether the migration is the likely cause, and "
+            "whether you would recommend a rollback."
+        )
+        return "\n\n".join(parts)
+
+
 #: Role → agent class, used by the coordinator to construct agents.
 #
 # The value type is intentionally loose: each entry has different input and
@@ -390,4 +446,5 @@ SPECIALISTS: dict[AgentRole, type[ContinuityAgent[Any, Any]]] = {
     AgentRole.VALIDATOR: ValidatorAgent,
     AgentRole.SECURITY_REVIEWER: SecurityReviewerAgent,
     AgentRole.RED_TEAM: RedTeamAgent,
+    AgentRole.RELEASE_GUARDIAN: ReleaseGuardianAgent,
 }

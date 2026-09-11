@@ -4,10 +4,8 @@ The loop's last step, and the one that makes the next pass correct. Until the
 baseline advances, Continuity still believes the project runs against the old
 provider version — so the next release would be diffed from the wrong side.
 
-Deliberately **deterministic and small**. A full Release Guardian — synthetic
-integration checks against a live environment, regression comparison, rollback
-*recommendation* — is Phase 9 (C9-02) and is not built. What is here verifies
-the things that can be verified from what Continuity already knows:
+Deliberately **deterministic and small**. What is here verifies the things that
+can be verified from what Continuity already knows:
 
 * the pull request really merged (from the record the webhook or poller wrote);
 * the migration it carried is the one Continuity produced (by branch and run);
@@ -17,14 +15,17 @@ the things that can be verified from what Continuity already knows:
 leaves it where it is — "we could not check" is not "it is fine", and moving a
 baseline on an unverified merge would hide the next real break.
 
-This does not claim to have verified a deployed application. It says exactly
-what it checked, and `VERIFIED` means "merged and consistent with the run",
-which the evidence report states in those words.
+On its own this claims nothing about a deployed application. The Release
+Guardian (C9-02, `backend/workers/post_merge_verify.py`) is what contacts one,
+and only when the project declared checks for it to run. With no manifest — the
+default — `VERIFIED` still means exactly "merged and consistent with the run",
+and the evidence report says so in those words.
 """
 
 from __future__ import annotations
 
 import uuid
+from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 from typing import Any
 
@@ -38,6 +39,32 @@ from backend.observability import events
 from backend.observability.logging import get_logger
 from backend.orchestration.state_machine import can_transition, transition
 from backend.providers.storage import advance_baseline, baseline_version
+from backend.verification.environment import MANIFEST_PATH
+from backend.workers.post_merge_verify import (
+    FAILED,
+    NOT_CONFIGURED,
+    PASSED,
+    EnvironmentVerification,
+    verify_environment,
+)
+
+#: How `verify_merge` asks about the environment. A callable so a test can
+#: supply a scripted answer without a live HTTP server, and so the production
+#: default stays the real one.
+EnvironmentCheck = Callable[
+    [AsyncSession, MigrationRun], Awaitable[EnvironmentVerification]
+]
+
+
+def _release_checks(release: EnvironmentVerification) -> dict[str, bool]:
+    """The Guardian's per-check results, for the same table as the rest."""
+    assessment = release.assessment
+    if assessment is None:
+        return {}
+    broken = {item.name for item in assessment.regressions} | set(
+        assessment.unattributable
+    )
+    return {name: False for name in sorted(broken)}
 
 logger = get_logger(__name__)
 
@@ -50,8 +77,21 @@ class VerificationResult:
     verified: bool
     reason: str
     checks: dict[str, bool] = field(default_factory=dict)
+    #: What the Release Guardian concluded, or why it concluded nothing:
+    #: `not_configured`, `disabled`, `manifest_invalid`, `passed`, `failed`.
+    verification: str = NOT_CONFIGURED
     baseline_before: str | None = None
     baseline_after: str | None = None
+
+    @property
+    def scope(self) -> str:
+        """Exactly what this result covers. Never more than what ran."""
+        if self.verification in {PASSED, FAILED}:
+            return (
+                "merge consistency, plus the checks this project declared in "
+                f"{MANIFEST_PATH}, run against its environment"
+            )
+        return "merge consistency only; no deployed application was contacted"
 
     @property
     def baseline_advanced(self) -> bool:
@@ -69,18 +109,28 @@ class VerificationResult:
             "baseline_before": self.baseline_before,
             "baseline_after": self.baseline_after,
             "baseline_advanced": self.baseline_advanced,
+            "verification": self.verification,
             # Said plainly, because the word invites a stronger reading than it
-            # deserves.
-            "scope": (
-                "merge consistency only; no deployed application was contacted"
-            ),
+            # deserves. The scope depends on whether the project declared checks
+            # and whether they ran, so it is derived rather than asserted.
+            "scope": self.scope,
         }
 
 
 async def verify_merge(
-    session: AsyncSession, run: MigrationRun
+    session: AsyncSession,
+    run: MigrationRun,
+    *,
+    environment: EnvironmentCheck | None = None,
 ) -> VerificationResult:
-    """Check a merged run and, on success, advance the baseline."""
+    """Check a merged run and, on success, advance the baseline.
+
+    `environment` is the seam for C9-02: it defaults to the real Release
+    Guardian and is replaced in tests. It is a parameter rather than an import
+    so that a test proving the regressed path does not need a live HTTP server,
+    and so that the default is still the production one.
+    """
+    environment = environment or verify_environment
     project = await session.get(Project, run.project_id)
     if project is None:  # pragma: no cover - foreign key
         raise RuntimeError("the run has no project")
@@ -128,6 +178,30 @@ async def verify_merge(
             "post-merge verification did not pass",
         )
         logger.warning("continuity.post_merge_failed", extra=result.summary())
+        return result
+
+    # C9-02. Consistency holds; now ask the environment, if the project told us
+    # how. A run whose declared checks regressed does not reach VERIFIED and
+    # does not move the baseline, because the code it adopted demonstrably broke
+    # something that worked before the merge.
+    release = await environment(session, run)
+    result.verification = release.verification
+    result.checks.update(
+        {f"release:{name}": ok for name, ok in _release_checks(release).items()}
+    )
+
+    if release.blocks:
+        result.reason = f"post-merge verification failed: {release.detail}"
+        await _move(
+            session, run, RunState.POST_MERGE_VERIFICATION_FAILED, result.reason
+        )
+        await _move(
+            session,
+            run,
+            RunState.HUMAN_REVIEW_REQUIRED,
+            "the release checks regressed after the merge",
+        )
+        logger.warning("continuity.release_verification_failed", extra=result.summary())
         return result
 
     result.verified = True

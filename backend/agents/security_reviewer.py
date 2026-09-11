@@ -95,6 +95,12 @@ class ReviewFinding:
             "category": self.category.value,
             "severity": self.severity.value,
             "summary": self.summary,
+            # Where it is. Without this the stored report says what is wrong and
+            # not where, which made C9-02's `_changed_files` silently return
+            # nothing on every real run — a reader could not follow a finding to
+            # a line either.
+            "file_path": self.evidence.file_path,
+            "line_start": self.evidence.line_start,
             "recommendation": self.recommendation.value,
             "policy_decision": self.policy_decision.value,
             "source": self.source,

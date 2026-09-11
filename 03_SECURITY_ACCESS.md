@@ -235,6 +235,42 @@ is treated as document text. It is quoted as evidence, flagged, and cannot be
 acted on — the agent has no credential-reading tool and the policy engine
 classifies credential exposure as DENY.
 
+### Outbound requests Continuity makes on its own host
+
+One feature does this, and it is worth naming separately because it is a
+different risk from everything above: post-merge release verification (C9-02)
+reads `.continuity/verification.json` from the project's repository and sends
+the requests it declares. Running a project's tests inside an isolated workspace
+and making outbound requests from Continuity's own host are not the same thing.
+
+Therefore:
+
+- It is **off unless a deployment enables it** (`RELEASE_VERIFICATION_ENABLED`,
+  default false). Both the pre-merge and post-merge observations are gated on
+  it, so with the feature off no request is made at all.
+- The manifest is validated before use: absolute `http`/`https` only, at most 20
+  checks, a timeout ceiling, paths relative to the declared base URL so a check
+  cannot point elsewhere, and only `GET`, `HEAD`, or `POST` — a manifest cannot
+  ask Continuity to `DELETE` something in order to verify it.
+- **The target must be a public host.** An instance metadata endpoint
+  (`169.254.169.254`, `metadata.google.internal`) is refused outright and cannot
+  be enabled, because reaching one from Continuity's host returns Continuity's
+  own credentials and no legitimate check points there. Loopback, private, and
+  link-local addresses are refused unless a deployment that knows its own
+  network sets `RELEASE_VERIFICATION_ALLOW_PRIVATE_HOSTS`. The host is resolved
+  and checked immediately before the request, not only when the manifest is
+  parsed. **Residual risk, stated rather than papered over:** the name is
+  resolved once here and again by the connection, so DNS rebinding between the
+  two is not closed by this check; closing it needs an address-pinned transport,
+  which is worth doing before this feature is pointed at a repository the
+  operator does not trust.
+- **No credential is attached.** Continuity holds a GitHub installation token
+  and model API keys; neither is sent to an address written in a repository
+  file.
+- Redirects are not followed, response reads are size-capped, and excerpts are
+  redacted before they are stored or shown to a model — a response body is
+  external content and is wrapped as untrusted like any other.
+
 ---
 
 ## 6. Code execution

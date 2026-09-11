@@ -1098,6 +1098,138 @@ async def test_merging_verifies_the_run_and_advances_the_baseline(
         assert await baseline_version(session, project, "acmepay") == "v2"
 
 
+async def test_a_project_with_no_declared_checks_claims_no_verification(
+    client: AsyncClient,
+    google: GoogleOAuthConfig,
+    checkout: Path,
+    tmp_path: Path,
+    engineer: Any,
+) -> None:
+    """C9-02's default, and the one most projects will be in.
+
+    The fixture repository declares no `.continuity/verification.json`, so
+    nothing was asked of any environment — and `VERIFIED` must not read as
+    though something was.
+    """
+    from backend.github.webhooks import settle
+    from backend.workers.post_merge_verify import DISABLED, NOT_CONFIGURED
+
+    engineer(MIGRATED_CLIENT)
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+    await _pipeline(project_id, checkout, tmp_path, github=FakeGitHub())
+
+    async with session_scope() as session:
+        record = (await session.execute(select(PullRequest))).scalar_one()
+        assert await settle(session, record, merged=True) == "merged"
+
+    async with session_scope() as session:
+        run = (await session.execute(select(MigrationRun))).scalar_one()
+        assert run.state is RunState.VERIFIED
+
+        stored = run.evidence_report or {}
+        release = stored.get("release_verification")
+        # Either the feature is off or there is no manifest. Both are recorded,
+        # and neither claims a deployment was checked.
+        assert release is None or release["verification"] in {
+            NOT_CONFIGURED,
+            DISABLED,
+        }
+
+
+async def test_a_declared_check_that_regressed_stops_the_run_and_the_baseline(
+    client: AsyncClient,
+    google: GoogleOAuthConfig,
+    checkout: Path,
+    tmp_path: Path,
+    engineer: Any,
+) -> None:
+    """C9-02 acceptance: a regressed environment reaches a person, not VERIFIED."""
+    from backend.agents.release_guardian import Regression, ReleaseAssessment
+    from backend.workers.post_merge import verify_merge
+    from backend.workers.post_merge_verify import FAILED, EnvironmentVerification
+
+    engineer(MIGRATED_CLIENT)
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+    await _pipeline(project_id, checkout, tmp_path, github=FakeGitHub())
+
+    async def regressed(_session: Any, _run: Any) -> EnvironmentVerification:
+        return EnvironmentVerification(
+            verification=FAILED,
+            detail="1 regression(s) after the merge.",
+            assessment=ReleaseAssessment(
+                passed=False,
+                compared_with_baseline=True,
+                regressions=[
+                    Regression(name="checkout", reason="expected 200, got 500", status=500)
+                ],
+            ),
+            checks_run=2,
+        )
+
+    async with session_scope() as session:
+        record = (await session.execute(select(PullRequest))).scalar_one()
+        record.merged = True
+        await session.flush()
+        run = (await session.execute(select(MigrationRun))).scalar_one()
+        result = await verify_merge(session, run, environment=regressed)
+
+    assert not result.verified
+    assert result.verification == FAILED
+    assert result.checks["release:checkout"] is False
+
+    async with session_scope() as session:
+        project = await session.get(Project, project_id)
+        assert project is not None
+        run = (await session.execute(select(MigrationRun))).scalar_one()
+
+        assert run.state is RunState.HUMAN_REVIEW_REQUIRED
+        # The migration is merged and the environment broke. Moving the baseline
+        # would tell the next pass this version is running fine.
+        assert await baseline_version(session, project, "acmepay") == "v1"
+
+
+async def test_declared_checks_that_hold_let_the_run_verify(
+    client: AsyncClient,
+    google: GoogleOAuthConfig,
+    checkout: Path,
+    tmp_path: Path,
+    engineer: Any,
+) -> None:
+    """The other half of the acceptance: configured and healthy."""
+    from backend.agents.release_guardian import ReleaseAssessment
+    from backend.workers.post_merge import verify_merge
+    from backend.workers.post_merge_verify import PASSED, EnvironmentVerification
+
+    engineer(MIGRATED_CLIENT)
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+    await _pipeline(project_id, checkout, tmp_path, github=FakeGitHub())
+
+    async def healthy(_session: Any, _run: Any) -> EnvironmentVerification:
+        return EnvironmentVerification(
+            verification=PASSED,
+            detail="2 declared check(s) passed after the merge.",
+            assessment=ReleaseAssessment(passed=True, compared_with_baseline=True),
+            checks_run=2,
+        )
+
+    async with session_scope() as session:
+        record = (await session.execute(select(PullRequest))).scalar_one()
+        record.merged = True
+        await session.flush()
+        run = (await session.execute(select(MigrationRun))).scalar_one()
+        result = await verify_merge(session, run, environment=healthy)
+
+    assert result.verified
+    assert result.verification == PASSED
+    # The claim grows only when something was actually checked.
+    assert ".continuity/verification.json" in result.scope
+
+    async with session_scope() as session:
+        project = await session.get(Project, project_id)
+        assert project is not None
+        assert await baseline_version(session, project, "acmepay") == "v2"
+
+
 async def test_the_baseline_does_not_advance_on_an_unverified_merge(
     client: AsyncClient,
     google: GoogleOAuthConfig,
