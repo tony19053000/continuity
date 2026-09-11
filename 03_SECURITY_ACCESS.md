@@ -264,8 +264,30 @@ Guarantees:
 - Environment is constructed explicitly. Continuity's own AWS, GitHub, and
   database credentials are **never** present in a workspace command's
   environment.
-- Timeouts, output caps, and cancellation are mandatory.
+- Timeouts, output caps, and cancellation are mandatory. A timeout kills the
+  whole **process group**, not just the process Continuity can see — a test
+  runner spawns children, and killing only the parent leaves the real work
+  running.
+- Output is capped, but the reader keeps draining past the cap. A reader that
+  stopped would block the child on its next pipe write and hang the very command
+  the cap exists to bound.
+- Truncated output carries an explicit marker. Silent truncation is how a
+  suite's failures disappear and its output reads as a pass.
+- Environment variable **names** are allowlisted too, not just the values
+  constructed. A name nobody thought to forbid is refused rather than forwarded,
+  so forgetting produces a broken command instead of a leaked credential.
+  `LD_PRELOAD` and `PYTHONSTARTUP` are refused for the same reason as
+  `AWS_SECRET_ACCESS_KEY`: they change what an allowlisted executable *is*.
+- `PATH` must be set explicitly, and executable resolution uses the command's
+  own `PATH` rather than Continuity's. Resolution through `os.environ` would
+  make the environment boundary decorative.
 - Every invocation is audited: argv, cwd, exit code, duration, truncated output.
+  **Refusals are audited too**, and are the more interesting row — "what did
+  this system try to do, and what stopped it" is unanswerable if a refused
+  command leaves no trace. Audited output is secret-filtered before storage:
+  repository output is untrusted, and the audit table is read into a browser.
+- The audit sink is a required constructor argument with no default. An executor
+  that could be built without one eventually would be.
 
 **Repository code is untrusted.** A test suite in an analyzed repository is
 attacker-controlled code from Continuity's perspective, and this is precisely

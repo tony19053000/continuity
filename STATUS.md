@@ -7,18 +7,20 @@ message disagrees with it, this file is right and the other is stale.
 
 ## Overall completion
 
-**60%**
+**70%**
 
-Phases 0–5 complete. Continuity now watches providers on its own: a pluggable
-adapter fetches spec versions, a deterministic differ computes the change set,
-and the Change Scout adds what only prose reveals — each change grounded in a
-sentence checked against the document Continuity fetched. Repeated polling of the
-same version produces exactly one change event. Test suite has **zero skips**.
+Phases 0–6 complete. Continuity now decides whether a provider change matters
+*here*, and proves it before touching code: changes are correlated to the graph
+deterministically, most reach nothing and cost no model call, and a rehearsal
+runs the affected tests against both sides of the contract through a confined
+executor. Every command runs argv-only, in a path-confined workspace, with a
+constructed environment holding none of Continuity's credentials. Test suite has
+**zero skips**.
 
 | Field | Value |
 | --- | --- |
-| Current phase | Phase 6 — Execution safety, impact analysis, rehearsal |
-| Current ticket | C6-01 — ExecutionProvider |
+| Current phase | Phase 7 — Migration Engineer + repair loop |
+| Current ticket | C7-01 |
 | Last updated | 2026-09-11 |
 
 ---
@@ -33,7 +35,7 @@ same version produces exactly one change event. Test suite has **zero skips**.
 | 3 | GitHub + safe repository ingestion | 40% | **DONE** — reviewer PASS |
 | 4 | Integration Mapper + Intelligence Graph | 50% | **DONE** — reviewer PASS |
 | 5 | Provider monitoring + Change Scout | 60% | **DONE** — reviewer PASS |
-| 6 | Execution safety, impact analysis, rehearsal | 70% | PENDING |
+| 6 | Execution safety, impact analysis, rehearsal | 70% | **DONE** — reviewer PASS |
 | 7 | Migration Engineer + repair loop | 80% | PENDING |
 | 8 | Security + approval + GitHub PR | 90% | PENDING |
 | 9 | Production security + frontend + polish | 100% | PENDING |
@@ -42,10 +44,10 @@ same version produces exactly one change event. Test suite has **zero skips**.
 
 ## Tickets
 
-**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05
+**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05, C6-01 … C6-04
 **In progress:** none
-**Next:** C6-01 — ExecutionProvider
-**Pending:** C6-01 onward — see `05_FEATURE_TICKETS.md`
+**Next:** C7-01 — see `05_FEATURE_TICKETS.md`
+**Pending:** C7-01 onward
 
 ---
 
@@ -125,12 +127,12 @@ running". Scheduling infrastructure belongs with deployment (Phase 8, C8-05).
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **656 passing, 0 skipped** |
-| Security | `uv run pytest tests/security` | **198 passing** |
+| Python unit + integration | `uv run pytest` | **799 passing, 0 skipped** |
+| Security | `uv run pytest tests/security` | **271 passing** |
 | Frontend unit | `npm run test` | **17 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
-| Typecheck (py) | `uv run mypy backend` | **Passing** (63 source files) |
+| Typecheck (py) | `uv run mypy backend` | **Passing** (70 source files) |
 | Lint (web) | `npm run lint` | **Passing** |
 | Typecheck (web) | `npm run typecheck` | **Passing** |
 | Build (web) | `npm run build` | **Passing** — routes `/`, `/signin` |
@@ -140,6 +142,9 @@ running". Scheduling infrastructure belongs with deployment (Phase 8, C8-05).
 | Live workflow inference | `uv run pytest tests/integration/test_phase4_live.py` | **3 passing** — Gemini names real workflows |
 | Live changelog interpretation | `uv run pytest tests/integration/test_phase5_live.py` | **3 passing** — Gemini extracts changelog-derived changes; injection contained |
 | Provider monitoring (end to end) | `uv run pytest tests/integration/test_provider_monitoring.py` | **14 passing** — new adapter plugged in, dedup proven |
+| Execution containment | `uv run pytest tests/security/test_execution.py` | **70 passing** — real processes, real kills |
+| Rehearsal | `uv run pytest tests/unit/validation` | **23 passing** — real pytest runs, real deltas |
+| Live impact judgment | `uv run pytest tests/integration/test_phase6_live.py` | **3 passing** — Gemini judges a real change set |
 
 Counts above are from real runs, not estimates.
 
@@ -173,7 +178,7 @@ Nothing above is claimed as working beyond what the live tests prove.
 | Repository boundary | **Implemented** — normalize-then-resolve, symlink-safe; one conformance suite over both sources |
 | Untrusted external content | Specified §5; exercised in C5-04 |
 | ExecutionProvider | Specified §6; implemented in C6-01 |
-| Confidential execution / TEE | Abstraction only — see B-04. **Not attested** |
+| Confidential execution / TEE | **Not built.** `ExecutionProvider` exists and is process isolation, not sandboxing. No `ConfidentialExecutionProvider`, no attestation — see B-04 |
 | Committed secrets | None. Verified against the staged diff at each gate |
 
 ---
@@ -725,3 +730,93 @@ periodic invocation does not exist.
 
 **Next intended task:** Phase 6, C6-01 — `ExecutionProvider`, argv-only and
 allowlisted, then impact analysis and migration rehearsal.
+
+---
+
+### 2026-09-11 — Phase 6, execution safety, impact analysis, rehearsal
+
+**What was built:** The half of Continuity that decides whether a change matters
+here, and proves it before touching anything. `ExecutionProvider` (C6-01),
+deterministic change-to-graph correlation (C6-02), the Impact Analyst (C6-03),
+and the rehearsal harness (C6-04).
+
+The selectivity is the product. On the fixture release, nine of twelve changes
+reach no code at all — settled by correlation, with **no model call**, because
+there is no judgment to make about a change that touches no line of the
+repository. Only the three that reach code are judged, and only what warrants a
+migration opens a run. That ratio is asserted in model calls and in
+`migration_runs` row counts, not described.
+
+**Verification:** All 8 gate checks pass. 799 backend tests (up from 656), 271
+security, 17 frontend, 0 skips. The execution tests spawn real processes and
+assert real kills; the rehearsal tests run real pytest and compare real pass
+counts. Live Gemini judges the real change set, run three times before being
+accepted.
+
+**Defects found during implementation:**
+
+1. **Boundary violation, caught by a Phase 2 security test.** I put migration-run
+   creation and state transitions inside `backend/agents/impact_analyst.py`.
+   `test_no_agent_module_can_reach_the_state_machine` failed on the import:
+   only the coordinator moves runs. The module was split — judgment stayed in
+   `backend/agents/impact_analyst.py`, orchestration moved to
+   `backend/orchestration/impact.py`. The rule was written four phases ago and
+   it is what caught this.
+
+2. **The rehearsal skipped a state.** `rehearse()` moved a run straight from
+   `REHEARSAL_PENDING` to a terminal rehearsal state. `ALLOWED_TRANSITIONS` has
+   no such edge, and the transition was silently declined — the run sat in
+   PENDING as though the rehearsal had never started, and the next move then
+   raised `IllegalTransition`. The state machine was right: the run now enters
+   `REHEARSAL_RUNNING` before anything executes, so a crash mid-rehearsal is
+   visibly stuck rather than invisible.
+
+3. **A racy process-death assertion.** `os.kill(pid, 0)` succeeds on a zombie
+   until its parent reaps it, and the parent here is the process just killed.
+   Sampling once passed alone and failed inside the full suite. Now polled with
+   a bounded wait — the property under test is "the grandchild does not
+   survive", and that is what is now asserted.
+
+4. **A shell scan that matched its own prose.** The first version of
+   `test_no_module_anywhere_can_spawn_a_shell` grepped source text for
+   `shell=True`, `os.system`, and friends — and failed on `execution.py`, whose
+   docstring names every one of them. Rewritten to parse the AST and match real
+   calls, with a second test that feeds it planted code so the scan cannot
+   silently stop detecting anything.
+
+**Contract amendment:** `ImpactAnalystInput.change` was a `ScoutedChange`, which
+after Phase 5 requires an `evidence_quote`. Most changes reaching this agent come
+from the deterministic differ, where there is no changelog sentence to quote —
+so a spec-derived change was unrepresentable. Replaced with `AnalyzedChange`,
+carrying the facts both sources share. `ImpactAnalystOutput` also lost its
+`Evidence` field: affected items come from graph nodes, which carry the
+extractor's CONFIRMED evidence, and an `Evidence` object a model assembles is an
+assertion about a file rather than a record of having read it.
+
+**What is NOT built:**
+- No provider simulator. `NoSimulationAdapter` reports that it cannot simulate,
+  producing `REHEARSAL_UNAVAILABLE`. It does not run the same suite twice and
+  call the inevitable non-difference a result. Simulators plug in through
+  `RehearsalAdapter` and are out of scope here (`CLAUDE.md` §3.13).
+- No TEE. `DevelopmentIsolatedExecutor` is **process isolation, not sandboxing**
+  — it confines paths, strips credentials, and bounds time and output. It does
+  not contain a process that escapes the kernel's boundaries. See B-04.
+- Nothing wires monitoring → correlation → impact → rehearsal into one pass yet.
+  Each stage is tested end to end on its own inputs; the run pipeline that calls
+  them in sequence arrives with the Migration Engineer in Phase 7.
+
+**Do not accidentally change:**
+- `argv[0]` rejecting path separators. Without it, `/tmp/attacker/pytest` is an
+  allowlisted basename pointing at anything.
+- The output reader draining past the cap. Stopping at the cap deadlocks the
+  child on its next write, and it presents as a timeout — which reads as the
+  repository's fault.
+- `start_new_session=True` and the `killpg` on timeout.
+- The empty-correlation short-circuit in `assess_change`. It is the difference
+  between one model call per release and twelve.
+- The `relevant and migration_required` conjunction in code. "Irrelevant, but
+  migrate" must not be able to open a run.
+- The absence of an edge from `REHEARSAL_FAILED` to `MIGRATION_PENDING`.
+
+**Next intended task:** Phase 7, C7-01 — the Migration Engineer and the bounded
+repair loop.

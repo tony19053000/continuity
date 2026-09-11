@@ -130,25 +130,56 @@ class IntegrationMapperOutput(_Contract):
 # --- Impact Analyst ------------------------------------------------------
 
 
+class AnalyzedChange(_Contract):
+    """One provider change, as the Impact Analyst sees it.
+
+    Deliberately not a `ScoutedChange`. Most changes reaching this agent come
+    from the deterministic differ, which produces no `evidence_quote` because
+    there is no changelog sentence behind a schema diff — requiring one would
+    make every spec-derived change unrepresentable here. This carries the facts
+    both sources have in common.
+    """
+
+    change_type: ChangeType
+    resource: str
+    breaking: bool
+    security_relevant: bool
+    authentication_relevant: bool
+    rationale: str = Field(max_length=1000, description="Why this change was recorded")
+
+
 class ImpactAnalystInput(_Contract):
     project_id: str
-    change: ScoutedChange
+    change: AnalyzedChange
     correlated_call_sites: list[str]
     correlated_workflows: list[str]
     relevant_source_slices: list[str]
 
 
 class ImpactAnalystOutput(_Contract):
+    """The judgment, not the inventory.
+
+    The agent decides relevance, severity, and whether a migration is needed.
+    *What* is affected is computed from the graph by `impact_analyst.py`, where
+    every file, symbol, workflow, and test carries the CONFIRMED evidence the
+    extractor recorded. The lists below are the agent's own account, kept
+    because a disagreement with the graph is worth logging — and validated
+    against it, so a path the model invented never reaches a report.
+
+    `evidence` is absent for the same reason: an `Evidence` object assembled by
+    a model is an assertion about a file, while one taken from a graph node is a
+    record of having read it.
+    """
+
     relevant: bool
     severity: Severity
     migration_required: bool
-    affected_files: list[str]
-    affected_symbols: list[str]
-    affected_workflows: list[str]
-    affected_tests: list[str]
+    affected_files: list[str] = Field(default_factory=list)
+    affected_symbols: list[str] = Field(default_factory=list)
+    affected_workflows: list[str] = Field(default_factory=list)
+    affected_tests: list[str] = Field(default_factory=list)
     authentication_consequence: str | None = Field(default=None, max_length=1000)
     reasoning_summary: str = Field(max_length=2000)
-    evidence: list[Evidence]
 
 
 # --- Migration Engineer --------------------------------------------------

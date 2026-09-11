@@ -338,6 +338,16 @@ Relational: `graph_nodes` and `graph_edges` tables scoped by
 `graph_version`; queries read the latest. This gives free history and makes
 "what changed in our integration surface" answerable.
 
+Correlation between a provider change and this graph is deterministic
+(`backend/integrations/correlation.py`, C6-02): endpoint paths are compared
+segment-wise so a template matches a concrete value and a different arity does
+not, webhook changes reach only the handlers for that event, and an enum change
+reaches only call sites passing a value the enum no longer accepts. A field
+change on a *renamed* endpoint is keyed to the new path while the repository
+still calls the old one, so the change set's rename map is applied when
+matching — without it, exactly the changes that break callers hardest would
+correlate to nothing.
+
 Query methods the Impact Analyst depends on:
 
 ```python
@@ -449,6 +459,28 @@ only with justification.
 | 2 | **Change Scout** | Detects and normalizes external provider changes with source evidence | No |
 | 3 | **Integration Mapper** | Builds the Integration Intelligence Graph from the deterministic index | No |
 | 4 | **Impact Analyst** | Decides whether a change actually affects this project; traces blast radius | No |
+
+The Impact Analyst judges **relevance, severity, and migration necessity**. It
+does not decide *what* is affected: that comes from the graph via C6-02
+correlation, so every affected file, symbol, workflow, and test carries the
+CONFIRMED evidence the extractor recorded. The agent's own list of affected
+files is kept and validated against the graph, and a path it named that the
+graph does not contain is dropped and counted rather than shown to a reviewer.
+
+`ImpactAnalystOutput` therefore carries no `Evidence` field. An `Evidence`
+object assembled by a model is an assertion about a file; one taken from a graph
+node is a record of having read it, and only the second belongs in a report.
+
+A change that correlates to no call site, webhook handler, or declared
+permission never reaches the model at all — there is no judgment to make about
+a change that touches no line of the repository, and asking would invite the
+model to find impact that is not there. On a typical release that is most of
+the change set.
+
+Judgment lives in `backend/agents/impact_analyst.py`; opening a migration run
+and moving the project live in `backend/orchestration/impact.py`, because only
+the coordinator moves runs and no module under `backend/agents/` may import the
+state machine.
 | 5 | **Migration Engineer** | Plans and produces the patch; diagnoses validation failures and repairs | Yes — isolated workspace only |
 | 6 | **Validator / Tester** | Runs build and tests, parses failures, produces deterministic evidence | No |
 | 7 | **Security Reviewer** | Reviews the diff; recommends ALLOW/ASK/DENY with structured findings | No |
@@ -761,11 +793,27 @@ New contract:      39 / 47 PASS
 Affected:          Checkout, Subscription Renewal, Webhook Handling
 ```
 
-Rehearsal is adapter-based (`RehearsalHarness`) and capability-gated: when a
-provider exposes no usable spec, the run records
-`REHEARSAL_UNAVAILABLE` with a reason and proceeds on impact analysis alone. It
-does not fabricate a rehearsal result, and it is not hardcoded to any specific
-provider.
+Rehearsal is adapter-based and capability-gated: when a provider exposes no
+usable spec, the run records `REHEARSAL_UNAVAILABLE` with a reason and proceeds
+on impact analysis alone. It does not fabricate a rehearsal result, and it is
+not hardcoded to any specific provider.
+
+Implemented in `backend/validation/rehearsal.py` as `rehearse(...)` plus a
+`RehearsalAdapter` protocol, rather than the `RehearsalHarness` class this
+section originally named — the seam that matters is the adapter, and a class
+wrapping a single function would have been ceremony. The adapter is what an
+externally-built provider simulator plugs into; Continuity holds no knowledge of
+any provider's simulation mechanism (`CLAUDE.md` §3.13).
+
+`NoSimulationAdapter` is the honest default for a deployment with no simulator.
+It reports that it cannot simulate, producing `REHEARSAL_UNAVAILABLE`. It does
+**not** run the same suite twice and report the inevitable non-difference: that
+would be a fabricated result, and it would read as `REHEARSAL_FAILED` — "we
+checked and found nothing" — for a check that never happened.
+
+Counts come from parsed process output through `ExecutionProvider`. A suite that
+times out or fails to collect produces no counts at all, and is reported as
+unavailable rather than as zero failures, because zero failures reads as a pass.
 
 ---
 
