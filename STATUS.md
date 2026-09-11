@@ -7,9 +7,9 @@ message disagrees with it, this file is right and the other is stale.
 
 ## Overall completion
 
-**90%**
+**93%**
 
-Phases 0–8 complete. Continuity now reviews its own patch and asks a human when
+Phases 0–8 complete, plus the end-to-end wiring that turns them into a product. Continuity now reviews its own patch and asks a human when
 it must. Thirteen finding categories are detected — most by code rather than by
 a model — and the policy engine, not the reviewer, decides; a run whose tests
 pass still stops at `SECURITY_REVIEW_PASSED` or `APPROVAL_PENDING` depending on
@@ -17,16 +17,17 @@ what the review found. Approving is something only an authenticated person can
 do, re-checked at the instant it is relied on rather than trusted from earlier
 in the run.
 
-**Delivery is built and tested but not yet invoked by a live run.** The branch,
-commit, and pull request path exists with all three refusal gates, and every
-figure in the pull request body traces to a named database column — but nothing
-calls `deliver()` outside its own tests. Connecting `SECURITY_REVIEW_PASSED`
-through approval to delivery is Phase 9. Test suite has **zero skips**.
+**Continuity now runs end to end.** `backend/orchestration/pipeline.py` connects
+monitor → correlate → assess → rehearse → migrate → repair → security review →
+approval gate → deliver, so a provider shipping v2 and a pull request waiting for
+review are the two ends of one call. `backend/workers/scheduler.py` runs it on an
+interval. The UI at `/projects` and `/approvals` observes and controls it, every
+figure read from a stored record. Test suite has **zero skips**.
 
 | Field | Value |
 | --- | --- |
 | Current phase | Phase 9 — Production security + frontend + polish |
-| Current ticket | C9-01 |
+| Current ticket | C9-01 (Red-Team) — deferred; pipeline, scheduler, and the operating UI came first |
 | Last updated | 2026-09-11 |
 
 ---
@@ -168,22 +169,19 @@ service missing, so they cannot drift. In short:
 - **Observability** — enable Transaction Search, then point an OTEL exporter at
   CloudWatch; log groups appear with the runtime's first span.
 
-### B-06 · No scheduler process — **OPEN**, recorded at the Phase 5 review
+### B-06 · No scheduler process — **RESOLVED** (2026-09-11)
 
-`monitor_project()` is a callable worker function. **Nothing invokes it
-periodically.** There is no cron, no dispatcher, no loop — provider monitoring
-runs when something calls it, and in this repository the only callers are tests.
+`backend/workers/scheduler.py` is the loop that was missing. It sweeps every
+project on an interval and drives `run_pipeline` for each, with the properties
+an unattended loop needs: it does not overlap itself for one project, one
+project's failure does not stop the sweep, a failing tick does not kill the
+loop, and shutdown waits for the pass in flight rather than orphaning a worktree
+and its child processes. 18 tests.
 
-What *is* proven: the monitor is independent of the API layer (asserted at the
-import graph, and by an integration test that never constructs an HTTP client),
-so nothing about it requires a user request. What is **not** built is the process
-that would call it every N minutes in production.
-
-C5-05's Files list names only `backend/workers/provider_monitor.py`, so this is
-within ticket scope rather than an unfinished ticket — the same shape as
-`backend/workers/repository_scan.py` from Phase 3. It is recorded here so that
-"Continuity monitors providers autonomously" is never read as "a scheduler is
-running". Scheduling infrastructure belongs with deployment (Phase 8, C8-05).
+Nothing starts it automatically yet — a deployment wires `start()` into its own
+lifecycle, because how and where it runs is a deployment decision. Development
+runs it in-process; production may replace it with SQS, Step Functions, or
+AgentCore Runtime without changing `run_pipeline`.
 
 ---
 
@@ -191,15 +189,15 @@ running". Scheduling infrastructure belongs with deployment (Phase 8, C8-05).
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **1083 passing, 0 skipped** |
+| Python unit + integration | `uv run pytest` | **1130 passing, 0 skipped** |
 | Security | `uv run pytest tests/security` | **322 passing** |
-| Frontend unit | `npm run test` | **17 passing** |
+| Frontend unit | `npm run test` | **41 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
-| Typecheck (py) | `uv run mypy backend` | **Passing** (85 source files) |
+| Typecheck (py) | `uv run mypy backend` | **Passing** (89 source files) |
 | Lint (web) | `npm run lint` | **Passing** |
 | Typecheck (web) | `npm run typecheck` | **Passing** |
-| Build (web) | `npm run build` | **Passing** — routes `/`, `/signin` |
+| Build (web) | `npm run build` | **Passing** — `/`, `/signin`, `/projects`, `/projects/[id]`, `/approvals` |
 | Migrations | `uv run alembic check` | **In sync** with the models |
 | Live integrations | `uv run pytest tests/integration/test_external_integrations.py` | **9 passing** — AWS, GitHub App, Google OAuth |
 | Live Strands + Gemini | `uv run pytest tests/integration/test_strands_roundtrip.py` | **3 passing** — real tool call proven |
@@ -1108,3 +1106,167 @@ polling fallback.
 
 **Next intended task:** Phase 9 — production security hardening, the frontend,
 and the end-to-end pipeline that connects every stage built so far.
+
+---
+
+### 2026-09-11 — End-to-end: pipeline, scheduler, and the operating UI
+
+**Why this came before Phase 9's capabilities.** Continuity was nine components
+that each worked alone and a frontend of three files. Adding a Red-Team agent to
+that would have made a better collection of parts, not a better product. The
+project owner's call, and the right one.
+
+**What was built:**
+
+- **`backend/orchestration/pipeline.py`** — monitor → correlate → assess →
+  rehearse → migrate → repair → security review → approval gate → deliver, in
+  one call. Written as a sequence of refusals rather than a happy path: most
+  provider releases reach no code, and a run ending at `CHANGE_IRRELEVANT` has
+  succeeded. It chooses among moves the state machine and the policy engine
+  permit and decides nothing itself — if this file ever starts re-deriving
+  relevance or re-checking approvals, a stage's seam is in the wrong place.
+
+- **`backend/workers/scheduler.py`** — closes B-06. An in-process asyncio loop
+  that sweeps every project on an interval. It does not overlap itself for one
+  project, one project's failure does not stop the sweep, a bad tick does not
+  kill the loop, and shutdown waits for the pass in flight rather than orphaning
+  a worktree and its child processes.
+
+- **The read API and `IntegrationHealth`** — projects, integrations, changes,
+  runs, activity, the graph, findings, and the evidence report. The health score
+  is §18's published formula computed from rows, returned with its inputs.
+
+- **The UI** — Projects, Overview, Integrations, Graph, Changes, Runs with the
+  migration report, Approvals, and Security. Every figure read from a stored
+  record.
+
+**Verified against the running system**, not only in tests. The API serves on
+:8000 and refuses unauthenticated reads; the UI renders the seeded project's
+real values and declines to score it, saying why, because it has never been
+scanned. The security page reports Development Isolation and
+`TEE attestation: Not Configured`.
+
+**Defects found:**
+
+1. **The findings endpoint returned an unredacted secret.** The Security
+   Reviewer redacts what it writes, but a read endpoint is the last stop before
+   a browser and must not depend on every writer having remembered. Free text is
+   now filtered on the way out as well as in.
+
+2. **A Phase 8 test broke for an honest reason.** It asserted `settle()` is the
+   only place a merge becomes a state change, by matching any mention of
+   `VERIFIED` — and the scheduler now reads that state to decide which projects
+   are idle. Narrowed to modules that both name the state and call `transition`,
+   which is the property it was always trying to express.
+
+3. **A test assertion, not the code, was wrong twice.** The pipeline's specific
+   stop reason was being overwritten by the generic one (real, fixed), and a
+   frontend assertion matched the "0 pending approvals" stat while checking that
+   no health placeholder was rendered (test fixed; the screen was right).
+
+**What is NOT built:**
+- Phase 9's capabilities: Red-Team (C9-01), Release Guardian (C9-02),
+  confidential execution (C9-03, and B-04 now describes accurately what does not
+  exist), the evaluation harness (C9-05), and the final gate (C9-06).
+- Repository import and scan-progress screens. The pipeline assumes a scanned
+  project; onboarding one through the UI is not yet possible.
+- Nothing starts the scheduler automatically. A deployment wires `start()` into
+  its own lifecycle.
+- No Playwright E2E. The end-to-end proof is
+  `tests/integration/test_pipeline.py`, which drives the real thing.
+
+**Do not accidentally change:**
+- The pipeline returning rather than raising for ordinary stops. A caller that
+  had to catch exceptions to tell "nothing was affected" from "the run failed"
+  would treat both as failures.
+- `_assess` setting a specific stop reason, and the caller not overwriting it.
+- The scheduler's in-flight set, and `stop()` awaiting the pass.
+- `IntegrationHealth.available` being false rather than a score of 0.
+- `lib/noMocks.test.ts`, and its two tests that feed the matchers planted code.
+
+**Next intended task:** Phase 9 proper — C9-01 Red-Team, then C9-02 Release
+Guardian, C9-05 evaluation, and C9-06 the final gate. C9-03 (TEE) stays deferred
+at the owner's direction.
+
+---
+
+### 2026-09-11 — End-to-end: one pipeline, a scheduler, and an operating UI
+
+**Why this came before Phase 9's remaining tickets.** Continuity had nine stages
+that each worked and nothing that connected them. A Red-Team agent guarding a
+pipeline nobody could run would have been the wrong thing to build next, so the
+product was made to work end to end first, on the project owner's instruction.
+TEE (C9-03) is explicitly deferred.
+
+**What was built:**
+
+- `backend/orchestration/pipeline.py` — monitor → correlate → assess → rehearse
+  → migrate → repair → security review → approval gate → deliver, as one call.
+  It is a sequence of refusals rather than a happy path: most provider releases
+  reach no code, and a run ending at `CHANGE_IRRELEVANT` has succeeded. No stage
+  is skipped because the previous one was confident — the gates belong to the
+  state machine and `backend/security/policy.py`, and the pipeline chooses among
+  moves they permit rather than deciding anything itself.
+
+- `backend/workers/scheduler.py` — closes B-06. Sweeps every project on an
+  interval. It does not overlap itself for one project, one project's failure
+  does not stop the sweep, a bad tick does not kill the loop, and shutdown waits
+  for the pass in flight rather than orphaning a worktree and its children.
+
+- `backend/api/routers/projects.py`, `backend/api/health_score.py` — the read
+  surface. The Integration Health score is the published §18 formula computed
+  from rows, returned with its inputs. A project with no inputs reports
+  `available: false`.
+
+- `apps/web` — Projects, Overview, Integrations, Graph, Changes, Runs and the
+  migration report, Approvals, and Security. Every value read from the API.
+
+**Verified against the running system, not only in tests.** The API served on
+:8000, refused unauthenticated reads, and the UI rendered the seeded project's
+real values — including declining to score it, because it has never been
+scanned, and reporting `TEE attestation: Not Configured`.
+
+**Defects found:**
+
+1. **The findings endpoint returned an unredacted secret.** The Security
+   Reviewer redacts what it writes, but a read endpoint is the last stop before
+   a browser and must not depend on every writer having remembered. Free text is
+   now filtered on the way out as well as in.
+
+2. **A Phase 8 structural test was too broad.** It asserted `settle()` is the
+   only place a merge becomes a state change by matching any mention of
+   `VERIFIED` — which the scheduler now legitimately reads to decide which
+   projects are idle. It now matches modules that both name the state *and* call
+   `transition`, which is the property it always meant.
+
+3. **The generic stop reason overwrote the specific one.** A project with no
+   integration graph reported "no change affects this project" instead of "scan
+   it first" — telling an operator the wrong thing about why nothing happened.
+
+**What is NOT built:**
+- C9-01 Red-Team, C9-02 Release Guardian, C9-03 confidential execution, C9-05
+  evaluation harness, C9-06 final gate.
+- Nothing *starts* the scheduler automatically. A deployment wires `start()` into
+  its own lifecycle, because how and where it runs is a deployment decision.
+- Sign-in, GitHub connection, and repository import screens (§3.1–§3.4). The
+  backend supports them; the pages do not exist, so a project is created by
+  seeding rather than through the UI.
+- Playwright E2E (C9-04 names it) — the pipeline's end-to-end test covers the
+  same path at the API level.
+
+**Do not accidentally change:**
+- The pipeline returning rather than raising for every ordinary stop. A caller
+  that had to catch exceptions to tell "irrelevant" from "failed" would treat
+  both as failures.
+- `_assess` setting a specific `stopped_at`, and `run_pipeline` not overwriting
+  it.
+- The scheduler's `_in_flight` set. Two pipelines on one project would fight over
+  the same run and the same workspace.
+- `IntegrationHealth.available`. A score with no inputs must not render.
+- `lib/noMocks.test.ts`, including the two tests that feed its matchers planted
+  code — a structural test that has stopped matching looks exactly like a
+  passing one.
+
+**Next intended task:** the project owner's call. The remaining Phase 9 tickets
+are C9-01, C9-02, C9-03, C9-05, C9-06, plus the sign-in and import screens that
+would let a project be created without seeding.
