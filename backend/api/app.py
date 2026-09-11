@@ -15,7 +15,7 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from backend.api.auth import router as auth_router
 from backend.api.auth.session import OAUTH_STATE_MAX_AGE
-from backend.api.routers import health
+from backend.api.routers import health, projects
 from backend.approvals import api as approvals_api
 from backend.github import webhooks as github_webhooks
 from backend.models.session import dispose_engine, init_engine
@@ -123,6 +123,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         )
 
     app.include_router(health.router)
+    app.include_router(projects.router)
     app.include_router(auth_router.router)
     app.include_router(approvals_api.router)
     app.include_router(github_webhooks.router)

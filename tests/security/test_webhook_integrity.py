@@ -553,8 +553,14 @@ async def test_one_unreachable_repository_does_not_stop_the_sweep(
 def test_settle_is_the_only_place_a_merge_becomes_a_state_change() -> None:
     """One function, so the webhook and the poller cannot drift apart.
 
-    Matched against parsed code rather than raw text: `models/base.py` mentions
-    the member in a docstring, and a grep would count that as a writer.
+    Matched against parsed code rather than raw text, and narrowed to modules
+    that can actually *move* a run: `models/base.py` names the member in a
+    docstring, and `workers/scheduler.py` reads it to decide which projects are
+    idle enough to sweep. Neither writes it, and counting either as a writer
+    would make this test fire on every honest change.
+
+    The real property: a module can only take a run to VERIFIED if it both
+    names the state and calls `transition`.
     """
     import ast
 
@@ -563,16 +569,44 @@ def test_settle_is_the_only_place_a_merge_becomes_a_state_change() -> None:
 
     for path in backend.rglob("*.py"):
         tree = ast.parse(path.read_text())
-        uses = [
-            node
-            for node in ast.walk(tree)
-            if isinstance(node, ast.Attribute)
+
+        names_verified = any(
+            isinstance(node, ast.Attribute)
             and node.attr == "VERIFIED"
-            and isinstance(node.value, ast.Name)
             # `state_machine.py` aliases the enum to `S` for readability.
+            and isinstance(node.value, ast.Name)
             and node.value.id in {"RunState", "S"}
-        ]
-        if uses:
+            for node in ast.walk(tree)
+        )
+        moves_runs = any(
+            isinstance(node, ast.Call)
+            and isinstance(node.func, ast.Name)
+            and node.func.id == "transition"
+            for node in ast.walk(tree)
+        )
+
+        if names_verified and moves_runs:
             setters.append(path.relative_to(backend).as_posix())
 
-    assert sorted(setters) == ["github/webhooks.py", "orchestration/state_machine.py"]
+    assert sorted(setters) == ["github/webhooks.py"]
+
+
+def test_the_state_machine_permits_exactly_two_routes_into_verified() -> None:
+    """The other half: what the graph itself allows.
+
+    `settle()` is the only code that moves a run there, and these are the only
+    two edges that exist for it to use.
+    """
+    from backend.models.enums import RunState
+    from backend.orchestration.state_machine import ALLOWED_TRANSITIONS
+
+    sources = {
+        state
+        for state, targets in ALLOWED_TRANSITIONS.items()
+        if RunState.VERIFIED in targets
+    }
+
+    assert sources == {
+        RunState.MERGE_WAITING,
+        RunState.POST_MERGE_VERIFICATION_PASSED,
+    }
