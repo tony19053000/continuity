@@ -20,6 +20,7 @@ is the layer above it.
 
 from __future__ import annotations
 
+import time
 import uuid
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
@@ -31,6 +32,7 @@ from strands.types.exceptions import StructuredOutputException
 
 from backend.models.enums import AgentRole
 from backend.observability.logging import get_logger
+from backend.observability.usage import record_model_call, usage_from
 from backend.shared.errors import ContinuityError
 from backend.shared.model_provider import ModelProvider
 
@@ -89,6 +91,7 @@ class AgentRunner(Protocol):
         tools: list[Any],
         prompt: str,
         output_model: type[BaseModel],
+        role: str = "",
     ) -> BaseModel: ...
 
 
@@ -103,6 +106,7 @@ class StrandsAgentRunner:
         tools: list[Any],
         prompt: str,
         output_model: type[BaseModel],
+        role: str = "",
     ) -> BaseModel:
         # `callback_handler=None` disables Strands' default handler, which
         # prints the model's streaming output — including its reasoning — to
@@ -115,7 +119,20 @@ class StrandsAgentRunner:
             tools=tools,
             callback_handler=None,
         )
+        started = time.perf_counter()
         result = await agent.invoke_async(prompt, structured_output_model=output_model)
+        elapsed_ms = int((time.perf_counter() - started) * 1000)
+
+        # Recorded here rather than around the call in `run()`, because this is
+        # the only place the SDK's own usage figures are in scope. With no
+        # collector installed — every production path today — this does nothing.
+        input_tokens, output_tokens = usage_from(result)
+        record_model_call(
+            role=role,
+            duration_ms=elapsed_ms,
+            input_tokens=input_tokens,
+            output_tokens=output_tokens,
+        )
 
         structured = getattr(result, "structured_output", None)
         if not isinstance(structured, BaseModel):
@@ -197,6 +214,7 @@ class ContinuityAgent[TIn: BaseModel, TOut: BaseModel](ABC):
                     tools=self.tools(),
                     prompt=prompt,
                     output_model=contract.output_model,
+                    role=contract.role.value,
                 )
             except (
                 ValidationError,

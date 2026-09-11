@@ -1,0 +1,47 @@
+{
+  "info": {
+    "title": "AcmePay"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/v1/charges": {
+      "post": {
+        "operationId": "createCharge",
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "properties": {
+                  "amount": {
+                    "type": "integer"
+                  },
+                  "currency": {
+                    "type": "string"
+                  },
+                  "order": {
+                    "type": "string"
+                  }
+                },
+                "required": [
+                  "amount"
+                ],
+                "type": "object"
+              }
+            }
+          }
+        },
+        "responses": {
+          "200": {}
+        }
+      }
+    },
+    "/v1/disputes": {
+      "post": {
+        "operationId": "createDispute",
+        "responses": {
+          "200": {}
+        }
+      }
+    }
+  }
+}

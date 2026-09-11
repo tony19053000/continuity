@@ -436,8 +436,38 @@ def test_git_worktree_is_allowlisted_narrowly() -> None:
 
     assert git is not None
     assert git["worktree"] == frozenset({"add", "remove", "prune", "list"})
-    for forbidden in ("push", "remote", "config", "submodule", "clone", "init"):
+
+
+def test_no_git_subcommand_reaches_the_network_or_rewrites_config() -> None:
+    """The property the allowlist is actually protecting.
+
+    `init` used to be in this list, on the reasoning that nothing needed it.
+    C9-05 does: the evaluation harness lays a labelled fixture down as a real
+    checkout, because the scanner and the workspace manager both work on real
+    repositories. It was added deliberately, not to make a test pass — it
+    creates a repository inside the confined cwd, reaches no network, and cannot
+    touch Continuity's own repository.
+
+    The rest stay out, and the reason is stated here so the next person needing
+    one has to argue the same case rather than reading an unexplained list:
+    `push`, `remote`, `clone`, `fetch`, and `pull` reach the network; `config`
+    changes what every later command does; `submodule` does both.
+    """
+    git = ALLOWED_EXECUTABLES["git"]
+
+    assert git is not None
+    for forbidden in (
+        "push",
+        "remote",
+        "config",
+        "submodule",
+        "clone",
+        "fetch",
+        "pull",
+    ):
         assert forbidden not in git
+
+    assert "init" in git, "C9-05 needs it; see the docstring above"
 
 
 async def test_an_unlisted_worktree_action_is_refused(tmp_path: Path) -> None:

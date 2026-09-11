@@ -953,7 +953,11 @@ fixture set and reported by a single command; the Integration Health formula is
 published alongside any displayed score; no metric is a model's opinion.
 **Tests:** the harness runs in CI over the labelled fixtures.
 **Security:** Fixtures contain no real credentials.
-**Status:** PENDING
+**Status:** DONE — reviewer PASS (2026-09-12). `backend/evaluation/`, run by
+`uv run python -m backend.evaluation`. Every §18 metric is computed; the ones
+whose inputs were not recorded report unavailable with the reason rather than as
+zero. The deterministic half runs with no model and is asserted in CI against
+the labelled set.
 
 ### C9-06 · Final quality gate
 **Purpose:** The last review before calling it done.

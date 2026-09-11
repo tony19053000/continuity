@@ -1,0 +1,24 @@
+{
+  "case_id": "required-field-added",
+  "description": "AcmePay v2 makes `currency` required on POST /v1/charges.",
+  "provider_id": "acmepay",
+  "from_version": "v1",
+  "to_version": "v2",
+  "expected": {
+    "changes": [
+      {
+        "resource": "POST /v1/charges request.currency",
+        "breaking": true
+      }
+    ],
+    "relevant": true,
+    "affected_files": [
+      "app/payments.py"
+    ],
+    "migration_expected": true,
+    "delivery_expected": true,
+    "approval_expected": false,
+    "security_violations_expected": 0
+  },
+  "notes": "The straightforward case: a real break, in code this project calls."
+}

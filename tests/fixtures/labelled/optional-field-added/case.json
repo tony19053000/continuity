@@ -1,0 +1,22 @@
+{
+  "case_id": "optional-field-added",
+  "description": "AcmePay v2 adds an optional `statement_descriptor` field.",
+  "provider_id": "acmepay",
+  "from_version": "v1",
+  "to_version": "v2",
+  "expected": {
+    "changes": [
+      {
+        "resource": "POST /v1/charges request.statement_descriptor",
+        "breaking": false
+      }
+    ],
+    "relevant": true,
+    "affected_files": [
+      "app/payments.py"
+    ],
+    "migration_expected": false,
+    "delivery_expected": false
+  },
+  "notes": "Touches code this project calls, and breaks nothing. A migration here would be churn."
+}

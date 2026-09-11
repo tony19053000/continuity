@@ -102,6 +102,13 @@ ALLOWED_EXECUTABLES: Final[Mapping[str, Subcommands | None]] = {
         # reaches no network, and fails loudly rather than partially — which is
         # exactly why it is the right tool for rebuilding a validated tree.
         "apply": None,
+        # C9-05. The evaluation harness lays a labelled fixture down as a real
+        # checkout, because the scanner, the workspace manager, and the
+        # validator all work on a real repository and measuring a pretend one
+        # would measure the pretence. `init` creates a repository inside the
+        # confined cwd and reaches no network — the same shape as
+        # `worktree add`, which is already here for the same reason.
+        "init": None,
     },
 }
 
@@ -127,6 +134,18 @@ ALLOWED_ENV_NAMES: Final[frozenset[str]] = frozenset(
         "PYTEST_ADDOPTS",
         "VIRTUAL_ENV",
         "npm_config_cache",
+        # Who git records as the author of a commit. Needed because `config` is
+        # deliberately *not* allowlisted — a command that can write git config
+        # can change what later commands do — so identity is supplied per
+        # process instead. None of these is a credential.
+        "GIT_AUTHOR_NAME",
+        "GIT_AUTHOR_EMAIL",
+        "GIT_COMMITTER_NAME",
+        "GIT_COMMITTER_EMAIL",
+        # Point git away from whatever is configured on the machine running
+        # this, so a developer's global git config cannot change a result.
+        "GIT_CONFIG_GLOBAL",
+        "GIT_CONFIG_SYSTEM",
     }
 )
 

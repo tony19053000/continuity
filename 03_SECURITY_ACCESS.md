@@ -299,6 +299,19 @@ Guarantees:
   `remove`, `prune`, and `list`, so migration isolation does not require opening
   up `git` as a whole. A subcommand cannot hide behind a flag — `git -c x=y
   push` reads as `push`, not as "no subcommand, therefore fine".
+
+  **Amendment (C9-05, 2026-09-12):** `git init` was added. The evaluation
+  harness lays a labelled fixture down as a real checkout, because the scanner
+  and the workspace manager both work on real repositories and measuring a
+  pretend one would measure the pretence. It creates a repository inside the
+  confined `cwd`, reaches no network, and cannot touch Continuity's own
+  repository. `push`, `remote`, `clone`, `fetch`, `pull`, `config`, and
+  `submodule` stay out — the first five reach the network, `config` changes what
+  every later command does, and `submodule` does both. Identity for a fixture
+  commit is supplied through `GIT_AUTHOR_*`/`GIT_COMMITTER_*` environment
+  variables precisely so `config` does not have to be opened up.
+  `tests/unit/migrations/test_workspace.py` records the reasoning beside the
+  assertion.
 - `cwd` is resolved and asserted to be inside the migration workspace root;
   symlink escapes are rejected.
 - Environment is constructed explicitly. Continuity's own AWS, GitHub, and

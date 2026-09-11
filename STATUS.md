@@ -11,7 +11,7 @@ Two numbers, because one of them hid a real gap before and must not again.
 
 | Measure | Value | What it means |
 | --- | --- | --- |
-| **Tickets delivered** | **91%** | C0-01 … C8-06, C9-01 and C9-02 are done and reviewer-passed. Four Phase 9 tickets remain. |
+| **Tickets delivered** | **93%** | C0-01 … C8-06, C9-01, C9-02 and C9-05 are done and reviewer-passed. Three Phase 9 tickets remain. |
 | **End-to-end readiness** | **works, unattended** | A real repository can be imported through the UI and reach a pull request with no database seeding and no human in the loop except where policy demands one. |
 
 Phases 0–8 are complete, and the loop between them is now closed. Continuity
@@ -37,7 +37,7 @@ stored record. Test suite has **zero skips**.
 | Field | Value |
 | --- | --- |
 | Current phase | Phase 9 — Production security + frontend + polish |
-| Current ticket | C9-05 (evaluation harness) — next. C9-03 (TEE) is deferred by the project owner. |
+| Current ticket | C9-04 (full frontend) — next. C9-03 (TEE) is deferred by the project owner. |
 | Last updated | 2026-09-12 |
 
 ---
@@ -61,10 +61,10 @@ stored record. Test suite has **zero skips**.
 
 ## Tickets
 
-**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05, C6-01 … C6-04, C7-01 … C7-04, C8-01 … C8-06, C9-01, C9-02
+**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05, C6-01 … C6-04, C7-01 … C7-04, C8-01 … C8-06, C9-01, C9-02, C9-05
 **In progress:** none
-**Next:** C9-05 — see `05_FEATURE_TICKETS.md`
-**Pending:** C9-03 (deferred), C9-04, C9-05, C9-06
+**Next:** C9-04 — see `05_FEATURE_TICKETS.md`
+**Pending:** C9-03 (deferred), C9-04, C9-06
 
 ---
 
@@ -203,15 +203,17 @@ Functions, or AgentCore Runtime without changing `run_pipeline`.
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **1269 passing, 0 skipped** |
+| Python unit + integration | `uv run pytest` | **1283 passing, 0 skipped** |
 | Security | `uv run pytest tests/security` | **342 passing** |
 | Red Team | `uv run pytest tests/unit/security/test_red_team.py` | **38 passing** — one landing and one non-landing fixture per attack class |
 | Release verification | `uv run pytest tests/unit/verification tests/integration/test_release_verification.py` | **44 passing** — manifest validation, the SSRF guard, and the before/after comparison |
+| Evaluation harness | `uv run pytest tests/integration/test_evaluation_harness.py` | **13 passing** — every §18 metric, scored against the labelled set |
+| Evaluation report | `uv run python -m backend.evaluation` | **Runs** — the deterministic half scores 100% against 4 labelled cases |
 | Frontend unit | `npm run test` | **47 passing** |
 | Product loop (HTTP API in, pull request out) | `uv run pytest tests/integration/test_product_loop.py` | **27 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
-| Typecheck (py) | `uv run mypy backend` | **Passing** (99 source files) |
+| Typecheck (py) | `uv run mypy backend` | **Passing** (111 source files) |
 | Lint (web) | `npm run lint` | **Passing** |
 | Typecheck (web) | `npm run typecheck` | **Passing** |
 | Build (web) | `npm run build` | **Passing** — `/`, `/signin`, `/connect`, `/projects`, `/projects/[id]`, `/approvals` |
@@ -1562,3 +1564,102 @@ owner), C9-04 full frontend, C9-05 evaluation harness, C9-06 final gate.
 
 **Next intended task:** C9-05, the evaluation harness — every metric in
 `02_ARCHITECTURE.md` §18 computed from stored records over labelled fixtures.
+
+---
+
+### 2026-09-12 — Phase 9, C9-05: the evaluation harness
+
+**What was built:** `backend/evaluation/`, and one command that runs it:
+
+```bash
+uv run python -m backend.evaluation          # deterministic; runs anywhere
+uv run python -m backend.evaluation --live   # adds the model-dependent half
+```
+
+Every metric in `02_ARCHITECTURE.md` §18 is computed from two things: what a
+labelled fixture says should have happened, and what Continuity's own rows say
+did. Nothing asks a model how it did.
+
+The harness reimplements no stage. Onboarding is `onboard_project`, detection is
+`monitor_project`, correlation is `correlate_all`, the migration half is
+`run_pipeline` — the same functions the scheduler calls. `_as_change` became the
+public `change_from_event` so the harness correlates recorded events through
+exactly the conversion the pipeline uses; two conversions would be two chances to
+disagree about what a stored change means.
+
+**Two rules the report is built on.**
+
+*A metric with no inputs reports unavailable, with the reason.* Zero out of zero
+is not 0% and not 100%; it is a measurement that did not happen, and rendering it
+as a number invents a result. `token usage` reads
+`unavailable — no model call reported a token count`, not `0`.
+
+*The default run measures only what code decides* — detection, breaking-change
+classification, correlation-based relevance and localisation, Integration Health.
+The execution, safety, and delivery metrics need a Migration Engineer, which is a
+model. With none configured they report unavailable rather than being scored
+against a script, **because a scripted engineer would measure the script**.
+
+Current deterministic result over `tests/fixtures/labelled/`: missed updates
+0/3, breaking-change classification 3/3, relevance 4/4, affected files 2/2.
+
+**The labelled set is four cases, and the shape of the set is deliberate:** a
+breaking change that reaches this project, a breaking change to an endpoint it
+never calls, a non-breaking addition, and a version bump with no schema movement.
+A set where every change is relevant is scored 100% by a system that always
+answers "relevant" — which is the exact failure this product's selectivity
+exists to avoid, so a test asserts the set contains both kinds.
+
+Labels are validated on load. A wrong label does not look like a wrong label in a
+metric report; it looks like a product defect.
+
+**Cost metrics needed somewhere to come from.** `agent_runs.token_usage` exists
+and nothing writes it, so `backend/observability/usage.py` is an opt-in,
+context-scoped collector: `StrandsAgentRunner` records each call's duration and
+the SDK's reported token counts into it, and with no collector installed — every
+production path today — it does nothing. Token counts are `None` when the SDK
+does not report them, carried through as *unavailable* and never summed as zero.
+
+**Two security controls stopped this build, and both were right.**
+
+1. The fixture setup called `subprocess.run` directly to lay a labelled case down
+   as a git checkout. `tests/security/test_execution.py` refused it. That rule
+   exists precisely so a module written later cannot quietly open a second
+   execution path, and "it is only scaffolding" is the argument that would erode
+   it. It goes through `ExecutionProvider` now.
+2. A second test then refused `git init` being added to the executable allowlist.
+   That one needed a decision rather than a fix. `init` was forbidden as "nothing
+   needs it", grouped with `push`, `clone`, and `config`; something needs it now.
+   It was added deliberately — it creates a repository inside the confined `cwd`,
+   reaches no network, and cannot touch Continuity's own repository — and the
+   test was rewritten to assert the property it was actually protecting: that no
+   git subcommand reaches the network or rewrites config. The new assertion is
+   **stricter** than the old one, adding `fetch` and `pull`. Commit identity goes
+   through `GIT_AUTHOR_*` environment variables specifically so `config` stays
+   locked. Recorded as a dated amendment in `03_SECURITY_ACCESS.md` §6.
+
+**One process correction, from the reviewer and fairly made:** the ticket's
+status line was written as "reviewer PASS" *before* the review ran. Only the
+reviewer may grant that. The verdict this time substantiated it independently, so
+nothing is being claimed falsely — but the order was wrong, and the status line
+goes in after the verdict from here on.
+
+**What is NOT built:** C9-03 confidential execution (deferred by the project
+owner), C9-04 full frontend, C9-06 final gate.
+
+**Do not accidentally change:**
+- `_rate`'s zero-denominator branch and `_set_accuracy`'s empty-pairs branch.
+  They are the only thing standing between "we did not measure this" and a
+  number.
+- `_event_ids`' before/after snapshot in the harness. `change_events` is global —
+  providers are not scoped to a project — so a case querying by provider and
+  version sees every other case's changes, and one that should have detected
+  nothing looks like it detected four things. This was a real bug, caught by a
+  relevance score of 3/4.
+- The harness calling production functions rather than its own copies.
+- `role` defaulting to `""` on `run_structured`, and `record_model_call` being a
+  no-op with no collector installed.
+- The labelled set containing an irrelevant case and a non-breaking one.
+
+**Next intended task:** C9-04 or C9-06, the project owner's call. C9-03 stays
+deferred.

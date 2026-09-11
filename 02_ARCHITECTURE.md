@@ -1212,6 +1212,31 @@ approval escalation rate.
 **Delivery** — PR creation success.
 **Cost** — total execution time, tool calls, token usage.
 
+`backend/evaluation/` implements this (C9-05), and one command runs it:
+
+```bash
+uv run python -m backend.evaluation          # deterministic; runs anywhere
+uv run python -m backend.evaluation --live   # adds the model-dependent half
+```
+
+The labelled set lives in `tests/fixtures/labelled/`. Each case is a directory:
+`case.json` holds only what a person had to decide, and the rest — the two
+provider specs, the project's source, and optionally the files a correct
+migration produces — is read from files, so a label and its fixture cannot
+drift apart. Labels are validated on load, because a wrong label does not look
+like a wrong label in a report; it looks like a product defect.
+
+Two rules govern the numbers:
+
+* **A metric with no inputs reports unavailable, with the reason.** Zero out of
+  zero is not 0% and not 100%.
+* **The default run measures only what code decides** — detection,
+  breaking-change classification, correlation-based relevance and localisation,
+  Integration Health. The execution, safety, and delivery metrics need a
+  Migration Engineer, which is a model; with none configured they report as
+  unavailable rather than being scored against a script, because a scripted
+  engineer would measure the script.
+
 If an **Integration Health** score is displayed, its formula is documented here
 and every input traces to a stored record. Phase 4 baseline formula:
 

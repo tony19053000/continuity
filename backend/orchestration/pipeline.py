@@ -269,7 +269,7 @@ async def _assess(
 
     correlations: list[tuple[ChangeEvent, Correlation]] = []
     for provider_id, provider_events in _by_provider(events).items():
-        changes = [_as_change(event) for event in provider_events]
+        changes = [change_from_event(event) for event in provider_events]
         correlated = await correlate_all(graph, version, provider_id, changes)
         correlations.extend(zip(provider_events, correlated, strict=True))
 
@@ -321,8 +321,13 @@ def _by_provider(events: list[ChangeEvent]) -> dict[str, list[ChangeEvent]]:
     return grouped
 
 
-def _as_change(event: ChangeEvent) -> ProviderChange:
+def change_from_event(event: ChangeEvent) -> ProviderChange:
     """Rebuild the schema object from the row the monitor wrote.
+
+    Public because correlation always starts from a recorded event, and the
+    evaluation harness correlates the same rows this pipeline does — two
+    conversions would be two chances to disagree about what a stored change
+    means.
 
     Correlation works on `ProviderChange`, and the pipeline re-reads from the
     database rather than holding the objects the monitor returned — so a run
@@ -413,7 +418,7 @@ async def _drive_run(
     event = await session.get(ChangeEvent, run.change_event_id)
     if event is None:  # pragma: no cover - foreign key
         raise RuntimeError("migration run has no change event")
-    change = _as_change(event)
+    change = change_from_event(event)
 
     impact_set = sorted({item.key for item in assessment.affected_files})
     test_selectors = sorted({item.key for item in assessment.affected_tests})

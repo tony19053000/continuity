@@ -1,0 +1,15 @@
+{
+  "case_id": "no-change",
+  "description": "AcmePay ships v2 with an identical specification.",
+  "provider_id": "acmepay",
+  "from_version": "v1",
+  "to_version": "v2",
+  "expected": {
+    "changes": [],
+    "relevant": false,
+    "affected_files": [],
+    "migration_expected": false,
+    "delivery_expected": false
+  },
+  "notes": "A version bump with no schema movement. Continuity must record nothing rather than something."
+}

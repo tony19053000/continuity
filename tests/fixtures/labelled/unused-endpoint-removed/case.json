@@ -1,0 +1,20 @@
+{
+  "case_id": "unused-endpoint-removed",
+  "description": "AcmePay v2 removes POST /v1/disputes, which this project never calls.",
+  "provider_id": "acmepay",
+  "from_version": "v1",
+  "to_version": "v2",
+  "expected": {
+    "changes": [
+      {
+        "resource": "POST /v1/disputes",
+        "breaking": true
+      }
+    ],
+    "relevant": false,
+    "affected_files": [],
+    "migration_expected": false,
+    "delivery_expected": false
+  },
+  "notes": "Breaking for somebody, irrelevant here. This is the selectivity the product lives or dies on: a run started for this is a wasted review cycle."
+}
