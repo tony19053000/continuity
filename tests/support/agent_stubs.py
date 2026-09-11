@@ -1,6 +1,6 @@
 """Stub every runtime agent at once, for tests about wiring rather than models.
 
-The pipeline calls four agents in sequence. A test about whether the *stages
+The pipeline calls five agents in sequence. A test about whether the *stages
 connect* should not depend on four live model calls — it would be slow, flaky,
 and would prove nothing about the wiring when it failed.
 
@@ -21,6 +21,7 @@ import pytest
 from backend.agents.contracts import (
     ChangeScoutOutput,
     ImpactAnalystOutput,
+    RedTeamOutput,
     SecurityReviewerOutput,
     ValidatorOutput,
 )
@@ -71,6 +72,16 @@ def clean_review() -> SecurityReviewerOutput:
     )
 
 
+def clean_attack() -> RedTeamOutput:
+    """The Red Team found nothing the probes had not already found.
+
+    The deterministic probes in `backend/security/attacks.py` still run — this
+    stubs only the model half — so a patch with a real weakness is still
+    blocked in tests that use this default.
+    """
+    return RedTeamOutput(attacks=[], summary="No further attack landed.")
+
+
 def validator_verdict() -> ValidatorOutput:
     return ValidatorOutput(
         build_ok=True,
@@ -94,6 +105,7 @@ def stub_agents(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> dict[str, 
     """
     from backend.agents import change_scout as scout_module
     from backend.agents import impact_analyst as impact_module
+    from backend.agents import red_team as red_team_module
     from backend.agents import security_reviewer as reviewer_module
     from backend.agents import validator as validator_module
 
@@ -102,6 +114,7 @@ def stub_agents(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> dict[str, 
         "impact_analyst": (impact_module, "ImpactAnalystAgent", impact_relevant()),
         "validator": (validator_module, "ValidatorAgent", validator_verdict()),
         "security_reviewer": (reviewer_module, "SecurityReviewerAgent", clean_review()),
+        "red_team": (red_team_module, "RedTeamAgent", clean_attack()),
     }
 
     runners: dict[str, FixedRunner] = {}

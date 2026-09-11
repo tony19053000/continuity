@@ -11,7 +11,9 @@ This module derives each precondition from stored rows for one specific run:
 | ------------------- | ------------------------------------------------------ |
 | validation passed   | the latest `migration_attempts` row's outcome           |
 | security review ran | `migration_runs.evidence_report["security_review"]`     |
-| policy decision     | the strictest `security_findings.policy_decision`       |
+| red team ran        | `migration_runs.evidence_report["red_team"]`            |
+| policy decision     | the strictest `security_findings.policy_decision`, for  |
+|                     | the attempt being delivered                             |
 | approvals           | `approvals` rows for this run, re-read at delivery      |
 | patch identity      | sha256 of the attempt's `patch_diff`, compared with     |
 |                     | what is about to be delivered                          |
@@ -35,12 +37,18 @@ from backend.github.delivery import DeliveryPreconditions, DeliveryRefused
 from backend.models import Approval, MigrationAttempt, MigrationRun, SecurityFinding
 from backend.models.enums import ApprovalStatus, AttemptOutcome, PolicyDecision
 from backend.observability.logging import get_logger
+from backend.security.findings import attempt_scope
 
 logger = get_logger(__name__)
 
 #: Where the security review's own record lives on the run. Its *presence* is
 #: what distinguishes "reviewed, nothing found" from "never reviewed".
 SECURITY_REVIEW_KEY: Final = "security_review"
+
+#: Where the Red Team's record lives. Present for the same reason the security
+#: review's is: an empty attack list means "attacked and held" only if something
+#: actually attacked it.
+RED_TEAM_KEY: Final = "red_team"
 
 #: The identity of the patch as a diff, recorded when it is reviewed.
 PATCH_DIFF_DIGEST_KEY: Final = "patch_diff_digest"
@@ -80,6 +88,7 @@ class DeliveryEvidence:
 
     validation_passed: bool = False
     security_review_ran: bool = False
+    red_team_ran: bool = False
     security_decision: PolicyDecision = PolicyDecision.DENY
     approval_ids: list[Any] = field(default_factory=list)
     unresolved_approvals: int = 0
@@ -94,6 +103,7 @@ class DeliveryEvidence:
         return {
             "validation_passed": self.validation_passed,
             "security_review_ran": self.security_review_ran,
+            "red_team_ran": self.red_team_ran,
             "security_decision": self.security_decision.value,
             "approvals": len(self.approval_ids),
             "unresolved_approvals": self.unresolved_approvals,
@@ -138,11 +148,24 @@ async def gather_evidence(
         # Not the same as "no findings". Nobody looked.
         evidence.missing.append("no security review is recorded for this run")
 
+    evidence.red_team_ran = RED_TEAM_KEY in stored
+    if not evidence.red_team_ran:
+        # Same distinction, one stage earlier. A run with no recorded attack was
+        # not found to be robust; it was never attacked.
+        evidence.missing.append("no red-team attack is recorded for this run")
+
+    # Only the findings about the patch that is shipping. A run makes several
+    # patches, and an earlier one that the Red Team broke leaves real findings
+    # behind — they are evidence of what happened, not a verdict on the patch
+    # that replaced it. Findings with no attempt are about the run itself and
+    # always count.
+    delivered_attempt = attempts[-1].attempt_number if attempts else None
     findings = list(
         (
             await session.execute(
                 select(SecurityFinding.policy_decision).where(
-                    SecurityFinding.migration_run_id == run.id
+                    SecurityFinding.migration_run_id == run.id,
+                    attempt_scope(delivered_attempt),
                 )
             )
         ).scalars()

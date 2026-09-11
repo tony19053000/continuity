@@ -14,7 +14,13 @@ from __future__ import annotations
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from backend.models.enums import ChangeType, FindingCategory, PolicyDecision, Severity
+from backend.models.enums import (
+    AttackClass,
+    ChangeType,
+    FindingCategory,
+    PolicyDecision,
+    Severity,
+)
 from backend.models.schemas import Evidence
 
 
@@ -301,6 +307,47 @@ class ProposedFinding(_Contract):
 class SecurityReviewerOutput(_Contract):
     findings: list[ProposedFinding]
     overall_recommendation: PolicyDecision
+    summary: str = Field(max_length=2000)
+
+
+# --- Red Team ------------------------------------------------------------
+
+
+class AttackSurfaceFile(_Contract):
+    """One post-migration file, as it will exist after merge."""
+
+    path: str
+    content: str
+
+
+class RedTeamInput(_Contract):
+    provider_id: str
+    files: list[AttackSurfaceFile]
+    #: Attack classes deterministic probes already landed. The agent is asked
+    #: not to repeat them, for the same reason the Security Reviewer is: a
+    #: second account of a weakness code already quoted adds a row and no
+    #: information.
+    already_found: list[str] = Field(default_factory=list)
+
+
+class ProposedAttack(_Contract):
+    """One attack the agent believes would land.
+
+    Deliberately flat. An earlier contract nested `Evidence` here and Gemini's
+    structured-output subset rejected the optional fields inside a list member,
+    so the citation is three required strings instead — and `""` rather than
+    `None` for the ones an agent may genuinely not know.
+    """
+
+    attack: AttackClass
+    severity: Severity
+    summary: str = Field(max_length=1000)
+    file_path: str
+    excerpt: str = Field(default="", max_length=1000)
+
+
+class RedTeamOutput(_Contract):
+    attacks: list[ProposedAttack]
     summary: str = Field(max_length=2000)
 
 

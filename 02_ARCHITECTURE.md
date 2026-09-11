@@ -484,12 +484,27 @@ state machine.
 | 5 | **Migration Engineer** | Plans and produces the patch; diagnoses validation failures and repairs | Yes — isolated workspace only |
 | 6 | **Validator / Tester** | Runs build and tests, parses failures, produces deterministic evidence | No |
 | 7 | **Security Reviewer** | Reviews the diff; recommends ALLOW/ASK/DENY with structured findings | No |
+| 8 | **Red-Team Agent** | Attacks the migrated code as it will exist after merge (malformed payloads, replayed webhooks, duplicate transactions, expired credentials, retry storms, prompt injection, invalid signatures) | No — none at all |
 
-Deferred until the core seven work:
+The Red Team reads a different surface from the Security Reviewer, and that is
+the point of having both. The reviewer reads the **diff**: what did this patch
+change that is dangerous? The Red Team reads the **result**: given the code
+exactly as it will exist after merge, what does a hostile provider do to it? A
+payment call that ships without an idempotency key changes nothing in the diff
+and still double-charges. `backend/security/attacks.py` holds the deterministic
+probes, one per attack class; `backend/agents/red_team.py` merges the agent's
+reading into them without letting it overwrite what code found.
+
+It can stop a run and cannot start one. A HIGH or CRITICAL attack returns the run
+to `REPAIR_RUNNING` carrying the attack as evidence, bounded by the same repair
+budget and ending at `HUMAN_REVIEW_REQUIRED` on exhaustion. Refusing is the
+conservative direction and is not authorization: nothing in the Red Team can
+permit a delivery.
+
+Deferred:
 
 | # | Agent | Purpose |
 | --- | --- | --- |
-| 8 | **Red-Team Agent** | Attacks the proposed migration (malformed payloads, replayed webhooks, duplicate transactions, expired credentials, retry storms, prompt injection, invalid signatures) |
 | 9 | **Release Guardian** | Post-merge verification against a real environment; recommends — never performs — rollback |
 
 ### Critical constraints

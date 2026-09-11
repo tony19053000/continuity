@@ -145,6 +145,30 @@ def test_the_orchestrator_holds_no_tools_at_all() -> None:
     assert OrchestratorAgent.contract.allowed_tools == frozenset()
 
 
+def test_the_red_team_holds_no_tools_at_all() -> None:
+    """C9-01 acceptance. The agent whose job is to think like an attacker is
+    the last one that should be able to act like one."""
+    from backend.agents.specialists import RedTeamAgent
+
+    assert RedTeamAgent.contract.allowed_tools == frozenset()
+
+
+def test_the_red_team_cannot_authorize_a_delivery() -> None:
+    """It can refuse; it cannot permit.
+
+    `recommendation_for` returns DENY or ALLOW, and neither reaches the
+    delivery gate as permission — the gate reads stored findings and policy
+    classifications. A test over the module's surface, because the property is
+    "no such path exists" rather than "this call returns the right value".
+    """
+    import backend.agents.red_team as module
+
+    source = Path(module.__file__ or "").read_text()
+    assert "DeliveryPreconditions" not in source
+    assert "deliver(" not in source
+    assert "ApprovalStatus" not in source
+
+
 def test_the_tool_dispatcher_is_the_only_caller_of_tool_functions() -> None:
     """No module may invoke a registered tool's function directly."""
     from backend.agents.tools.registry import registry

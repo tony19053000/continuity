@@ -56,6 +56,7 @@ from backend.models import (
     TestResult,
 )
 from backend.models.enums import FindingCategory
+from backend.security.findings import current, is_superseded, latest_attempt_numbers
 from backend.shared.redaction import redact, redact_deep
 
 #: Findings that mean the migration asks for more access than it had.
@@ -350,6 +351,13 @@ async def _findings(
             )
         ).scalars()
     )
+    # A run makes several patches. Every finding is reported, tagged with the
+    # attempt it is about, because the history of what was rejected belongs in
+    # an evidence report. The *claims* below are computed from the current
+    # patch only — a permission expansion in a patch that was thrown away is
+    # not a permission expansion in the one being delivered.
+    latest = await latest_attempt_numbers(session, [run.id])
+    live = current(rows, latest)
 
     report.security_findings = [
         {
@@ -358,13 +366,15 @@ async def _findings(
             "summary": row.summary,
             "recommendation": row.recommendation.value,
             "policy_decision": row.policy_decision.value,
+            "attempt_number": row.attempt_number,
+            "superseded": is_superseded(row, latest),
             # Surfaced, not smoothed over (`03_SECURITY_ACCESS.md` §10).
             "disagreed": row.recommendation is not row.policy_decision,
         }
         for row in rows
     ]
     report.permission_expansions = sorted(
-        {row.category.value for row in rows if row.category in PERMISSION_CATEGORIES}
+        {row.category.value for row in live if row.category in PERMISSION_CATEGORIES}
     )
 
 

@@ -227,6 +227,14 @@ export interface GraphView {
 export interface FindingView {
   id: string;
   migration_run_id: string;
+  /** Which repair attempt's patch this finding is about. */
+  attempt_number: number | null;
+  /**
+   * Whether the patch this finding is about was replaced by a later attempt —
+   * a run can produce several patches, and a finding against one the Red Team
+   * rejected is history rather than a defect in the code about to ship.
+   */
+  superseded: boolean;
   category: string;
   severity: string;
   summary: string;

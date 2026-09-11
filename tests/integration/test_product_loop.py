@@ -129,28 +129,58 @@ class AcmePay(BaseProviderAdapter):
 
 # --- the migration the engineer is scripted to produce -------------------
 
+#: What a good migration produces. It is deliberately robust — an idempotency
+#: key on every money-moving call, a deadline, and a rate-limit branch — because
+#: the Red Team (C9-01) attacks the code as it will exist after merge, and a
+#: patch missing any of those is returned to the repair loop rather than
+#: delivered. The weak version lives in `WEAK_MIGRATION` below, where it is used
+#: to prove exactly that.
 MIGRATED_CLIENT = '''\
 """Payment integration for the commerce API."""
+
+import uuid
 
 import httpx
 from acmepay import AcmePayClient
 
 client = AcmePayClient(api_version="v2")
 
+#: How long a provider call may take before the workflow gives up on it.
+TIMEOUT_SECONDS = 10
+
 
 def create_payment(order_id: str, amount_cents: int, currency: str = "usd") -> dict:
     """Charge a customer for an order. Used by the checkout flow."""
-    return client.post(
+    response = client.post(
         "/v1/charges",
         json={"order": order_id, "amount": amount_cents, "currency": currency},
+        headers={"Idempotency-Key": str(uuid.uuid5(uuid.NAMESPACE_URL, order_id))},
+        timeout=TIMEOUT_SECONDS,
     )
+    if getattr(response, "status_code", 200) == 429:
+        raise RuntimeError("acmepay declined this request for capacity reasons")
+    return response
 
 
 def refund_payment(charge_id: str) -> httpx.Response:
     """Refund a charge. Present so the file has a real HTTP client, which is
     what the extractor looks for when deciding a call targets a provider."""
-    return httpx.post(f"/v1/charges/{charge_id}/refund")
+    return httpx.post(
+        f"/v1/charges/{charge_id}/refund",
+        headers={"Idempotency-Key": f"refund-{charge_id}"},
+        timeout=TIMEOUT_SECONDS,
+    )
 '''
+
+#: The same migration written carelessly: the currency field is added and the
+#: idempotency key is dropped, so a retried checkout charges twice.
+WEAK_MIGRATION = MIGRATED_CLIENT.replace(
+    '        headers={"Idempotency-Key": str(uuid.uuid5(uuid.NAMESPACE_URL, order_id))},\n',
+    "",
+).replace(
+    '        headers={"Idempotency-Key": f"refund-{charge_id}"},\n',
+    "",
+)
 
 SCOPE_WIDENING = MIGRATED_CLIENT + '\nSCOPES = ["customers.read", "customers.write"]\n'
 
@@ -800,6 +830,230 @@ async def test_a_failing_patch_is_repaired_within_the_budget(
     ]
     assert attempts[0].failure_evidence is not None
     assert attempts[0].failure_evidence["failed"] >= 1
+
+
+# =========================================================================
+# 6. The Red Team attacks the migration before a human sees it (C9-01)
+# =========================================================================
+
+
+async def test_a_patch_the_red_team_breaks_goes_back_to_the_repair_loop(
+    client: AsyncClient,
+    google: GoogleOAuthConfig,
+    checkout: Path,
+    tmp_path: Path,
+    engineer: Any,
+) -> None:
+    """The first patch passes the suite and still must not ship.
+
+    It drops the idempotency key, so a retried checkout charges twice. Tests
+    cannot see that — they pass. The Red Team can, and the run returns to
+    `REPAIR_RUNNING` rather than to a person.
+    """
+    from backend.models import SecurityFinding
+    from backend.models.enums import AttemptOutcome, FindingCategory
+
+    engineer(WEAK_MIGRATION, MIGRATED_CLIENT)
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+    github = FakeGitHub()
+
+    result = await _pipeline(project_id, checkout, tmp_path, github=github)
+
+    (outcome,) = result.runs
+    repair = outcome.repair
+    assert repair is not None
+
+    # Both attempts passed their tests. The first was rejected anyway.
+    assert [a.outcome for a in repair.attempts] == [
+        AttemptOutcome.PASSED,
+        AttemptOutcome.PASSED,
+    ]
+    assert outcome.reached_delivery
+    assert github.blobs == [MIGRATED_CLIENT], "the weak patch was never delivered"
+
+    assert repair.red_team is not None and repair.red_team.held
+
+    async with session_scope() as session:
+        findings = list(
+            (
+                await session.execute(
+                    select(SecurityFinding).where(
+                        SecurityFinding.migration_run_id == outcome.migration_run_id
+                    )
+                )
+            ).scalars()
+        )
+    duplicates = [
+        f for f in findings if f.category is FindingCategory.DUPLICATE_TRANSACTION_RISK
+    ]
+    assert duplicates, "the attack that blocked the first patch is recorded"
+    assert "idempotency" in duplicates[0].summary.lower()
+
+
+async def test_a_patch_the_red_team_keeps_breaking_ends_with_a_person(
+    client: AsyncClient,
+    google: GoogleOAuthConfig,
+    checkout: Path,
+    tmp_path: Path,
+    engineer: Any,
+) -> None:
+    """The loop is bounded. It does not retry forever, and it does not give up
+    into delivery — it ends where only a human can move it."""
+    engineer(WEAK_MIGRATION, WEAK_MIGRATION, WEAK_MIGRATION, WEAK_MIGRATION)
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+    github = FakeGitHub()
+
+    result = await _pipeline(project_id, checkout, tmp_path, github=github)
+
+    (outcome,) = result.runs
+    assert outcome.final_state is RunState.HUMAN_REVIEW_REQUIRED
+    assert not outcome.reached_delivery
+    assert github.calls == []
+
+
+async def test_the_red_team_runs_on_the_code_not_the_diff(
+    client: AsyncClient,
+    google: GoogleOAuthConfig,
+    checkout: Path,
+    tmp_path: Path,
+    engineer: Any,
+) -> None:
+    """The attack surface is the file as it will exist after merge.
+
+    `files_attacked` names the migrated file, which the diff-based Security
+    Reviewer never sees in full — that difference is the reason this stage
+    exists at all.
+    """
+    engineer(MIGRATED_CLIENT)
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+
+    result = await _pipeline(project_id, checkout, tmp_path, github=FakeGitHub())
+
+    (outcome,) = result.runs
+    assert outcome.repair is not None
+    report = outcome.repair.red_team
+    assert report is not None
+    assert report.files_attacked == ["app/payments.py"]
+
+
+async def test_a_finding_from_a_rejected_patch_is_labelled_as_history(
+    client: AsyncClient,
+    google: GoogleOAuthConfig,
+    checkout: Path,
+    tmp_path: Path,
+    engineer: Any,
+) -> None:
+    """The rejected patch's finding stays, and is not mistaken for a live one.
+
+    Deleting it would destroy the evidence that an attempt was rejected and
+    why. Presenting it unlabelled would tell a reviewer that the code about to
+    ship double-charges, when the patch that did was thrown away.
+    """
+    engineer(WEAK_MIGRATION, MIGRATED_CLIENT)
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+
+    result = await _pipeline(project_id, checkout, tmp_path, github=FakeGitHub())
+    (outcome,) = result.runs
+    assert outcome.reached_delivery
+
+    findings = (await client.get(f"/projects/{project_id}/findings")).json()
+    superseded = [f for f in findings if f["superseded"]]
+    assert superseded, "the rejected attempt's finding is still readable"
+    assert superseded[0]["attempt_number"] == 1
+    assert all(f["attempt_number"] is not None for f in findings)
+
+    # The run card counts what is wrong with the patch that is shipping.
+    (run_view,) = (await client.get(f"/projects/{project_id}/runs")).json()
+    assert run_view["findings"] == len(findings) - len(superseded)
+
+
+async def test_the_report_does_not_claim_a_rejected_patch_expanded_permissions(
+    client: AsyncClient,
+    google: GoogleOAuthConfig,
+    checkout: Path,
+    tmp_path: Path,
+    engineer: Any,
+) -> None:
+    """The evidence report lists every finding and claims only about the
+    current one."""
+    from backend.migrations.evidence import build_report
+
+    engineer(WEAK_MIGRATION, MIGRATED_CLIENT)
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+    result = await _pipeline(project_id, checkout, tmp_path, github=FakeGitHub())
+    (outcome,) = result.runs
+
+    async with session_scope() as session:
+        run = await session.get(MigrationRun, outcome.migration_run_id)
+        assert run is not None
+        report = await build_report(session, run)
+
+    assert any(f["superseded"] for f in report.security_findings), (
+        "the rejected attempt's finding is in the report"
+    )
+    assert report.permission_expansions == []
+
+
+async def test_delivery_refuses_a_run_with_no_recorded_red_team_attack(
+    client: AsyncClient, google: GoogleOAuthConfig, checkout: Path
+) -> None:
+    """Same distinction as the security review, one stage earlier.
+
+    An empty attack list means "attacked and held" only if something actually
+    attacked it. A run with no record was not found robust; it was never tried.
+    """
+    from backend.github.delivery import DeliveryRefused
+    from backend.models import MigrationAttempt
+    from backend.models.enums import AttemptOutcome, ChangeType
+    from backend.orchestration.delivery_gate import (
+        SECURITY_REVIEW_KEY,
+        preconditions_for,
+    )
+
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+
+    async with session_scope() as session:
+        project = await session.get(Project, project_id)
+        assert project is not None
+        event = ChangeEvent(
+            provider_id="acmepay",
+            old_version="v1",
+            new_version="v2",
+            change_type=ChangeType.REQUEST_FIELD_REQUIRED,
+            resource=f"POST /v1/charges request.currency {uuid.uuid4().hex[:6]}",
+            breaking=True,
+            source={"kind": "openapi_spec"},
+            evidence={"kind": "provider_spec", "confidence": "confirmed"},
+            detected_at=__import__("datetime").datetime.now(
+                __import__("datetime").UTC
+            ),
+        )
+        session.add(event)
+        await session.flush()
+        run = MigrationRun(
+            project_id=project.id,
+            change_event_id=event.id,
+            provider_id="acmepay",
+            from_version="v1",
+            to_version="v2",
+            state=RunState.PR_PENDING,
+            # Reviewed, and never attacked.
+            evidence_report={SECURITY_REVIEW_KEY: {"decision": "allow"}},
+        )
+        session.add(run)
+        await session.flush()
+        session.add(
+            MigrationAttempt(
+                migration_run_id=run.id,
+                attempt_number=1,
+                outcome=AttemptOutcome.PASSED,
+                patch_diff="--- a/x\n+++ b/x\n",
+            )
+        )
+        await session.flush()
+
+        with pytest.raises(DeliveryRefused, match="no red-team attack"):
+            await preconditions_for(session, run, files={"app/payments.py": "x"})
 
 
 # =========================================================================

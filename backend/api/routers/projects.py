@@ -45,6 +45,11 @@ from backend.models import (
     User,
 )
 from backend.models.enums import ApprovalStatus, Confidence
+from backend.security.findings import (
+    attempt_scope,
+    is_superseded,
+    latest_attempt_numbers,
+)
 from backend.shared.errors import NotFound
 from backend.shared.redaction import redact
 
@@ -289,11 +294,19 @@ async def list_runs(
                 .where(MigrationAttempt.migration_run_id == row.id)
             )
         ).scalar_one()
+        # Findings about the patch as it now stands. An earlier attempt that the
+        # Red Team rejected leaves real findings behind, and counting them here
+        # would describe this run's current patch by a patch that no longer
+        # exists. They are still readable — and labelled — at `/findings`.
+        latest = await latest_attempt_numbers(session, [row.id])
         findings = (
             await session.execute(
                 select(func.count())
                 .select_from(SecurityFinding)
-                .where(SecurityFinding.migration_run_id == row.id)
+                .where(
+                    SecurityFinding.migration_run_id == row.id,
+                    attempt_scope(latest.get(row.id)),
+                )
             )
         ).scalar_one()
         pull = (
@@ -456,10 +469,18 @@ async def list_findings(
             )
         ).scalars()
     )
+    # Superseded findings are shown, not filtered away — an earlier patch
+    # rejected for a reason is worth seeing — but they are labelled, so a
+    # reader never mistakes history for a defect in the code about to ship.
+    latest = await latest_attempt_numbers(
+        session, [row.migration_run_id for row in rows if row.migration_run_id]
+    )
     return [
         {
             "id": str(row.id),
             "migration_run_id": str(row.migration_run_id),
+            "attempt_number": row.attempt_number,
+            "superseded": is_superseded(row, latest),
             "category": row.category.value,
             "severity": row.severity.value,
             # Filtered on the way out, not only on the way in. The reviewer

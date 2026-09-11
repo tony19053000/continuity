@@ -1,4 +1,4 @@
-"""The six specialist runtime agents.
+"""The seven specialist runtime agents.
 
 Each declares a full contract and renders its own prompt. None returns a canned
 result — an agent whose capability is not yet built raises `NotImplementedError`
@@ -7,7 +7,8 @@ instead of looking like it works.
 
 Tool privilege is deliberately lopsided: only the Migration Engineer can write
 files, and only inside a migration workspace. Everyone else is read-only, which
-is why a compromised or over-eager analysis agent cannot change code.
+is why a compromised or over-eager analysis agent cannot change code — and the
+Red Team, whose whole job is to think like an attacker, holds no tools at all.
 """
 
 from __future__ import annotations
@@ -24,6 +25,8 @@ from backend.agents.contracts import (
     IntegrationMapperOutput,
     MigrationEngineerInput,
     MigrationEngineerOutput,
+    RedTeamInput,
+    RedTeamOutput,
     SecurityReviewerInput,
     SecurityReviewerOutput,
     ValidatorInput,
@@ -325,6 +328,55 @@ report what you actually see rather than what you expect to be accepted.""",
         )
 
 
+class RedTeamAgent(ContinuityAgent[RedTeamInput, RedTeamOutput]):
+    """Attacks the migrated code. Holds no tools at all, by contract.
+
+    `allowed_tools` is empty and a test asserts it stays empty. An agent whose
+    job is to think like an attacker is the last one that should be able to act
+    like one — and the attacks it reports are findings, never actions.
+    """
+
+    contract = AgentContract(
+        role=AgentRole.RED_TEAM,
+        system_prompt=f"""{_COMMON_RULES}
+
+You are the Red Team. You are given integration source code exactly as it will
+exist after a migration is merged, and you look for what a hostile provider or
+an attacker does to it.
+
+Consider: malformed responses, missing fields, unexpected fields, unexpected
+nulls, expired credentials, invalid tokens, webhook replay, webhook duplication,
+duplicate transactions, timeouts, retry storms, rate limiting, malicious
+external text, prompt injection, unauthorized tool use, permission escalation,
+and invalid signatures.
+
+Report only attacks that this specific code would actually suffer, citing the
+file and the line. A weakness you cannot point at is not a finding. Deterministic
+probes have already covered some classes; do not repeat those.""",
+        allowed_tools=frozenset(),
+        input_model=RedTeamInput,
+        output_model=RedTeamOutput,
+        max_attempts=2,
+    )
+
+    def build_prompt(self, task: RedTeamInput) -> str:
+        # The code is the provider's target, not the provider's words, but it is
+        # still the output of a model reading an untrusted specification. It is
+        # marked untrusted for the same reason a changelog is.
+        sources = "\n\n".join(
+            untrusted_block(item.path, item.content) for item in task.files
+        )
+        return "\n\n".join(
+            [
+                f"Provider: {task.provider_id}",
+                "Attack classes already found by deterministic probes:\n"
+                + ("\n".join(f"- {a}" for a in task.already_found) or "- none"),
+                sources,
+                "Report every attack that would land against this code.",
+            ]
+        )
+
+
 #: Role → agent class, used by the coordinator to construct agents.
 #
 # The value type is intentionally loose: each entry has different input and
@@ -337,4 +389,5 @@ SPECIALISTS: dict[AgentRole, type[ContinuityAgent[Any, Any]]] = {
     AgentRole.MIGRATION_ENGINEER: MigrationEngineerAgent,
     AgentRole.VALIDATOR: ValidatorAgent,
     AgentRole.SECURITY_REVIEWER: SecurityReviewerAgent,
+    AgentRole.RED_TEAM: RedTeamAgent,
 }

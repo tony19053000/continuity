@@ -497,6 +497,12 @@ class SecurityFinding(UUIDPrimaryKey, Timestamps, Base):
     migration_run_id: Mapped[uuid.UUID | None] = mapped_column(
         ForeignKey("migration_runs.id"), index=True
     )
+    #: Which attempt this finding is about. A run makes several patches, and a
+    #: finding against a patch that was discarded must not govern the one that
+    #: ships — the rows stay as evidence, and the delivery gate reads only the
+    #: attempt it is about to deliver. `None` means the finding is about the run
+    #: rather than about one patch.
+    attempt_number: Mapped[int | None] = mapped_column(default=None)
     category: Mapped[FindingCategory] = mapped_column(index=True)
     severity: Mapped[Severity] = mapped_column(index=True)
     summary: Mapped[str] = mapped_column(Text)

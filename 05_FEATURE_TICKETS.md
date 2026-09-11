@@ -871,7 +871,12 @@ finding; a finding at `high` or `critical` severity returns the run to
 write tools; it runs after validation passes and before PR delivery.
 **Tests:** one fixture per attack class, plus the return-to-repair path.
 **Security:** Runs entirely against the isolated workspace.
-**Status:** PENDING
+**Status:** DONE — reviewer PASS (2026-09-12). Implemented as
+`backend/security/attacks.py` (17 deterministic probes) plus
+`backend/agents/red_team.py` (the agent half). It attacks the **post-migration
+source**, not the diff, which is what distinguishes it from C8-01. A HIGH or
+CRITICAL attack routes the run through `SECURITY_REVIEW_FAILED → REPAIR_RUNNING`
+with the attack as evidence for the next attempt; no new run state was needed.
 
 ### C9-02 · Release Guardian
 **Purpose:** Verify the migration in a real environment after merge.

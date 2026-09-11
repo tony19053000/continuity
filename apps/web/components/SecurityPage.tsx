@@ -63,7 +63,12 @@ export function SecurityPage({ projectId }: { projectId: string }) {
         ) : (
           <ul className="divide-y divide-neutral-200 dark:divide-neutral-800">
             {data.map((finding) => (
-              <li key={finding.id} className="py-3 text-sm">
+              <li
+                key={finding.id}
+                className={
+                  finding.superseded ? "py-3 text-sm opacity-60" : "py-3 text-sm"
+                }
+              >
                 <div className="flex items-start justify-between gap-3">
                   <div className="min-w-0">
                     <p className="font-medium">{humanise(finding.category)}</p>
@@ -80,6 +85,14 @@ export function SecurityPage({ projectId }: { projectId: string }) {
                     <Badge tone={toneForSeverity(finding.severity)}>
                       {finding.severity}
                     </Badge>
+                    {finding.superseded ? (
+                      <Badge
+                        tone="neutral"
+                        title="This finding is about a patch a later attempt replaced. It is kept as a record of why that attempt was rejected, and does not describe the code being delivered."
+                      >
+                        superseded
+                      </Badge>
+                    ) : null}
                     {finding.disagreed ? (
                       <Badge
                         tone="attention"

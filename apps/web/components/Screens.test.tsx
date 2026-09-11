@@ -262,6 +262,8 @@ describe("SecurityPage", () => {
       {
         id: "f1",
         migration_run_id: "r1",
+        attempt_number: 2,
+        superseded: false,
         category: "oauth_scope_change",
         severity: "high",
         summary: "The patch requests customers.write.",
@@ -275,6 +277,31 @@ describe("SecurityPage", () => {
 
     expect(await screen.findByText("disagreement")).toBeInTheDocument();
     expect(screen.getByText(/Reviewer advised/)).toBeInTheDocument();
+    expect(screen.queryByText("superseded")).not.toBeInTheDocument();
+  });
+
+  it("marks a finding whose patch a later attempt replaced", async () => {
+    // A run makes several patches. A finding against one the Red Team rejected
+    // is a record of why it was rejected, not a defect in the code being
+    // delivered — and must not read as one.
+    vi.spyOn(api, "listFindings").mockResolvedValue([
+      {
+        id: "f1",
+        migration_run_id: "r1",
+        attempt_number: 1,
+        superseded: true,
+        category: "duplicate_transaction_risk",
+        severity: "high",
+        summary: "The charge carries no idempotency key.",
+        recommendation: "ask",
+        policy_decision: "ask",
+        disagreed: false,
+      },
+    ]);
+
+    render(<SecurityPage projectId={PROJECT_ID} />);
+
+    expect(await screen.findByText("superseded")).toBeInTheDocument();
   });
 });
 

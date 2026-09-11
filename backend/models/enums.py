@@ -236,6 +236,36 @@ class FindingCategory(StrEnum):
     TEST_WEAKENED = "test_weakened"
 
 
+class AttackClass(StrEnum):
+    """The attack classes the Red-Team agent tries (`05_FEATURE_TICKETS.md` C9-01).
+
+    These are not the same axis as `FindingCategory`. A finding category names
+    *what is wrong with a change*; an attack class names *what an attacker or a
+    misbehaving provider does*. The two are related by
+    `backend/agents/red_team.py`'s `ATTACK_CATEGORY`, because the policy engine
+    classifies categories and nothing else — an attack class never reaches
+    policy directly.
+    """
+
+    MALFORMED_RESPONSE = "malformed_response"
+    MISSING_FIELD = "missing_field"
+    UNEXPECTED_FIELD = "unexpected_field"
+    UNEXPECTED_NULL = "unexpected_null"
+    EXPIRED_CREDENTIAL = "expired_credential"
+    INVALID_TOKEN = "invalid_token"  # noqa: S105
+    WEBHOOK_REPLAY = "webhook_replay"
+    WEBHOOK_DUPLICATION = "webhook_duplication"
+    DUPLICATE_TRANSACTION = "duplicate_transaction"
+    TIMEOUT = "timeout"
+    RETRY_STORM = "retry_storm"
+    RATE_LIMIT = "rate_limit"
+    MALICIOUS_EXTERNAL_TEXT = "malicious_external_text"
+    PROMPT_INJECTION = "prompt_injection"
+    UNAUTHORIZED_TOOL = "unauthorized_tool"
+    PERMISSION_ESCALATION = "permission_escalation"
+    INVALID_SIGNATURE = "invalid_signature"
+
+
 class ActivityEventKind(StrEnum):
     """User-facing activity events (`02_ARCHITECTURE.md` §16).
 

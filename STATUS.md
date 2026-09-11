@@ -11,7 +11,7 @@ Two numbers, because one of them hid a real gap before and must not again.
 
 | Measure | Value | What it means |
 | --- | --- | --- |
-| **Tickets delivered** | **87%** | C0-01 … C8-06 are done and reviewer-passed. Phase 9's six tickets are not. |
+| **Tickets delivered** | **89%** | C0-01 … C8-06 and C9-01 are done and reviewer-passed. Five Phase 9 tickets remain. |
 | **End-to-end readiness** | **works, unattended** | A real repository can be imported through the UI and reach a pull request with no database seeding and no human in the loop except where policy demands one. |
 
 Phases 0–8 are complete, and the loop between them is now closed. Continuity
@@ -37,8 +37,8 @@ stored record. Test suite has **zero skips**.
 | Field | Value |
 | --- | --- |
 | Current phase | Phase 9 — Production security + frontend + polish |
-| Current ticket | C9-01 (Red-Team) — deferred; pipeline, scheduler, and the operating UI came first |
-| Last updated | 2026-09-11 |
+| Current ticket | C9-02 (Release Guardian) — next. C9-01 is done. |
+| Last updated | 2026-09-12 |
 
 ---
 
@@ -61,10 +61,10 @@ stored record. Test suite has **zero skips**.
 
 ## Tickets
 
-**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05, C6-01 … C6-04, C7-01 … C7-04, C8-01 … C8-06
+**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05, C6-01 … C6-04, C7-01 … C7-04, C8-01 … C8-06, C9-01
 **In progress:** none
-**Next:** C9-01 — see `05_FEATURE_TICKETS.md`
-**Pending:** C9-01 onward
+**Next:** C9-02 — see `05_FEATURE_TICKETS.md`
+**Pending:** C9-02, C9-03, C9-04, C9-05, C9-06
 
 ---
 
@@ -203,13 +203,14 @@ Functions, or AgentCore Runtime without changing `run_pipeline`.
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **1150 passing, 0 skipped** |
-| Security | `uv run pytest tests/security` | **324 passing** |
-| Frontend unit | `npm run test` | **46 passing** |
-| Product loop (HTTP API in, pull request out) | `uv run pytest tests/integration/test_product_loop.py` | **18 passing** |
+| Python unit + integration | `uv run pytest` | **1199 passing, 0 skipped** |
+| Security | `uv run pytest tests/security` | **329 passing** |
+| Red Team | `uv run pytest tests/unit/security/test_red_team.py` | **38 passing** — one landing and one non-landing fixture per attack class |
+| Frontend unit | `npm run test` | **47 passing** |
+| Product loop (HTTP API in, pull request out) | `uv run pytest tests/integration/test_product_loop.py` | **24 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
-| Typecheck (py) | `uv run mypy backend` | **Passing** (96 source files) |
+| Typecheck (py) | `uv run mypy backend` | **Passing** (99 source files) |
 | Lint (web) | `npm run lint` | **Passing** |
 | Typecheck (web) | `npm run typecheck` | **Passing** |
 | Build (web) | `npm run build` | **Passing** — `/`, `/signin`, `/connect`, `/projects`, `/projects/[id]`, `/approvals` |
@@ -1384,3 +1385,93 @@ frontend is the minimum needed to operate the loop, not the full 18 screens of
 
 **Next intended task:** the project owner's call. Phase 9 proper — C9-01, C9-02,
 C9-03, C9-05, C9-06.
+
+---
+
+### 2026-09-12 — Phase 9, C9-01: the Red Team
+
+**What was built:** the agent that tries to break a migration before a person is
+asked to trust it — and, more importantly, the thing it reads.
+
+`backend/security/categories.py` reads the **diff**: what did this patch change
+that is dangerous? `backend/security/attacks.py` reads the **result**: given the
+integration code exactly as it will exist after merge, what does a hostile
+provider or an attacker do to it? That distinction is the entire reason C9-01 is
+not a second copy of C8-01. A migration that rewrites a payment client and ships
+it without an idempotency key **removes** nothing, so the diff is clean; the
+tests pass, because no test retries a checkout; and the result double-charges.
+Only attacking the finished code finds it.
+
+Seventeen attack classes, each with a deterministic probe, a fixture that lands
+and a fixture that does not: malformed response, missing field, unexpected field,
+unexpected null, expired credential, invalid token, webhook replay, webhook
+duplication, duplicate transaction, timeout, retry storm, rate limit, malicious
+external text, prompt injection, unauthorized tool, permission escalation,
+invalid signature. `backend/agents/red_team.py` merges the agent's reading into
+the probes' — INFERRED beside CONFIRMED, never overwriting it, and an attack
+citing a file the agent was not given is discarded.
+
+**Where it runs, and what it can do:** inside `SECURITY_REVIEW_RUNNING`, after
+validation passes and before anything is delivered. A HIGH or CRITICAL attack
+moves the run to `SECURITY_REVIEW_FAILED` and the loop routes it back to
+`REPAIR_RUNNING` carrying the attack as evidence, so the next attempt is a
+response to a specific failure. **No new run states were added** — that edge
+already existed. The same repair budget bounds it, and exhaustion ends at
+`HUMAN_REVIEW_REQUIRED`.
+
+It can stop a run and cannot start one. `allowed_tools` is empty, asserted by
+test. Refusing is not authorizing: nothing in the Red Team can permit a delivery,
+and `backend/security/policy.py` still decides.
+
+**One structural change it forced.** A run makes several patches. A finding
+against a patch the Red Team rejected was still governing the patch that replaced
+it — the run stayed ASK forever, blocked by a defect that no longer existed.
+`security_findings.attempt_number` (migration `a39d335d7f8a`, additive and
+nullable) records which patch a finding is about, and `backend/security/findings.py`
+is now the single definition of "findings about the patch that is shipping". The
+delivery gate reads only those. The API, the evidence report, and the security
+page show **all** findings — deleting evidence of a rejected attempt would be
+worse — labelled `superseded`, so history is never mistaken for a live defect.
+
+**The delivery gate gained one more precondition:** a run with no recorded
+red-team attack is refused. Same distinction as the security review, one stage
+earlier — an empty attack list means "attacked and held" only if something
+actually attacked it.
+
+**Two review rounds failed before this passed.** Both findings were mine and both
+were real:
+
+1. **A comment could block a correct migration.** `# scope = "full" was required
+   by the old SDK; we now request scope="read"` raised a blocking escalation
+   finding — with no line and no excerpt, so it was an unanswerable complaint
+   that would have looped a correct patch through repair until the budget ran
+   out. The first fix skipped comment lines, which introduced the opposite bug:
+   real code sharing a line with a docstring close became invisible, silently
+   disabling any probe gated on it. The fix that held uses Python's own
+   `tokenize` to blank comments and standalone string statements **character for
+   character**, so line numbers stay aligned and code beside prose is still seen.
+   String *literals* are deliberately untouched: `SCOPES = "charges.admin"` is
+   the escalation, not a description of one.
+2. **The frontend never got the `superseded` flag.** The API and the report
+   carried it; `SecurityPage.tsx` rendered every row identically, so a CRITICAL
+   finding from a rejected patch looked exactly like a defect in the code about
+   to ship. That was the whole point of the fix, stopping one layer short.
+
+**What is NOT built:** C9-02 Release Guardian, C9-03 confidential execution,
+C9-04 full frontend, C9-05 evaluation harness, C9-06 final gate.
+
+**Do not accidentally change:**
+- `_text_probe` returning `[]` when no code line can be quoted. A
+  CONFIRMED-confidence finding with no excerpt is not evidence, and at a
+  blocking severity it is a run that can never be fixed.
+- `code_lines` blanking rather than dropping. Dropping the line is what disabled
+  the probes the first time.
+- Standalone strings being prose and string literals being code. Collapsing that
+  distinction breaks the escalation probe in one direction or the docstring
+  false positive in the other.
+- `attempt_scope` being the only definition of which findings count. Three
+  readers depend on agreeing.
+- The Red Team's empty `allowed_tools`.
+
+**Next intended task:** C9-02, Release Guardian — post-merge verification against
+a configured environment, with no code path that performs a rollback.

@@ -30,7 +30,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.agents.contracts import AnalyzedChange, ImpactAnalystOutput
 from backend.agents.migration_engineer import MigrationPatch, produce_patch
-from backend.agents.security_reviewer import SecurityReview, review_patch
+from backend.agents.red_team import RedTeamReport, attack_migration
+from backend.agents.security_reviewer import (
+    SecurityReview,
+    classify_category,
+    review_patch,
+)
 from backend.agents.validator import Validation, validate
 from backend.approvals.service import ApprovalRequest, create_request
 from backend.migrations.workspace import MigrationWorkspace
@@ -47,6 +52,7 @@ from backend.observability.logging import get_logger
 from backend.orchestration.coordinator import RunCoordinator
 from backend.orchestration.delivery_gate import (
     PATCH_DIFF_DIGEST_KEY,
+    RED_TEAM_KEY,
     SECURITY_REVIEW_KEY,
     patch_digest,
 )
@@ -88,6 +94,9 @@ class RepairResult:
     #: The security review of the patch that passed, when one passed. `None`
     #: when the loop never reached a green suite — there is nothing to review.
     review: SecurityReview | None = None
+    #: The Red Team's report on the patch that passed. `None` for the same
+    #: reason: there was nothing to attack.
+    red_team: RedTeamReport | None = None
 
     @property
     def repaired(self) -> bool:
@@ -171,11 +180,34 @@ async def run_repair_loop(
                 session,
                 run,
                 record,
+                workspace=workspace,
                 impact_set=impact_set,
                 model_provider=model_provider,
                 coordinator=coordinator,
                 result=result,
             )
+
+            assault = result.red_team
+            if assault is not None and assault.blocking:
+                # C9-01: the Red Team broke it, so this is not a finished patch
+                # waiting for a person — it is a patch to fix. The run goes back
+                # to the repair loop carrying the attack as evidence, and the
+                # budget check at the top of the loop is what stops it from
+                # going round forever.
+                await coordinator.advance(
+                    session,
+                    run,
+                    to_state=RunState.REPAIR_RUNNING,
+                    reason=(
+                        f"{len(assault.blocking)} red-team finding(s) must be "
+                        "fixed before this patch can be delivered"
+                    ),
+                    actor="orchestrator",
+                )
+                previous_failure = assault.brief()
+                result.final_state = RunState.REPAIR_RUNNING
+                continue
+
             return result
 
         if record.outcome is AttemptOutcome.ESCALATED:
@@ -252,7 +284,7 @@ async def _one_attempt(
         return record
 
     blocking = patch.blocking_findings
-    await _store_findings(session, run, patch)
+    await _store_findings(session, run, patch, attempt_number=attempt_number)
 
     if blocking:
         # Not a failure to repair around. A credential in the patch or a new
@@ -441,7 +473,11 @@ async def _store_attempt(
 
 
 async def _store_findings(
-    session: AsyncSession, run: MigrationRun, patch: MigrationPatch
+    session: AsyncSession,
+    run: MigrationRun,
+    patch: MigrationPatch,
+    *,
+    attempt_number: int,
 ) -> None:
     """Findings from the patch rules (C7-02).
 
@@ -455,6 +491,7 @@ async def _store_findings(
         session.add(
             SecurityFinding(
                 migration_run_id=run.id,
+                attempt_number=attempt_number,
                 category=finding.category,
                 severity=finding.severity,
                 summary=finding.summary,
@@ -472,6 +509,7 @@ async def _review(
     run: MigrationRun,
     record: AttemptRecord,
     *,
+    workspace: MigrationWorkspace,
     impact_set: list[str],
     model_provider: ModelProvider,
     coordinator: RunCoordinator,
@@ -504,6 +542,41 @@ async def _review(
         migration_run_id=run.id,
     )
 
+    # C9-01. The Red Team goes first, and attacks the *result* rather than the
+    # diff: the code exactly as it will exist after merge. A patch that survives
+    # review and still hands a hostile provider a way in is not a patch to ask a
+    # person about.
+    assault = await attack_migration(
+        provider_id=run.provider_id,
+        files=_post_migration_files(workspace, patch),
+        model_provider=model_provider,
+    )
+    result.red_team = assault
+    await _store_attacks(session, run, assault, attempt_number=record.attempt_number)
+    await _record_red_team(session, run, assault)
+
+    if assault.blocking:
+        await coordinator.advance(
+            session,
+            run,
+            to_state=RunState.SECURITY_REVIEW_FAILED,
+            reason=(
+                f"red team: {len(assault.blocking)} attack(s) land against this "
+                "patch"
+            ),
+            actor="red_team",
+            detail={
+                "blocking": len(assault.blocking),
+                "attacks": [item.attack.value for item in assault.blocking],
+                "model_consulted": assault.model_consulted,
+            },
+        )
+        result.final_state = RunState.SECURITY_REVIEW_FAILED
+        result.reason = (
+            f"the red team broke the patch: {len(assault.blocking)} attack(s) land"
+        )
+        return
+
     review = await review_patch(
         provider_id=run.provider_id,
         diff=patch.diff,
@@ -518,6 +591,7 @@ async def _review(
         session.add(
             SecurityFinding(
                 migration_run_id=run.id,
+                attempt_number=record.attempt_number,
                 category=finding.category,
                 severity=finding.severity,
                 summary=finding.summary,
@@ -630,6 +704,79 @@ async def _record_review(
     # The diff's identity. The *files* digest is recorded by the caller that
     # holds the workspace, because only it can read what the patch produced.
     stored[PATCH_DIFF_DIGEST_KEY] = patch_digest(patch.diff)
+    tracked.evidence_report = stored
+    await session.flush()
+
+
+def _post_migration_files(
+    workspace: MigrationWorkspace, patch: MigrationPatch
+) -> dict[str, str]:
+    """The files this patch produced, as they will exist after merge.
+
+    Read from the workspace rather than reconstructed from the diff, because the
+    diff shows what changed and the Red Team needs what remains. A file the
+    patch deleted is simply absent, which is the correct answer for it.
+    """
+    files: dict[str, str] = {}
+    for path in sorted(patch.applied):
+        if not workspace.exists(path):
+            continue
+        try:
+            files[path] = workspace.read_file(path)
+        except (OSError, UnicodeDecodeError):
+            # A binary or unreadable file is not attackable source. Skipping it
+            # is recorded by its absence from `files_attacked`, so the report
+            # never implies it was examined.
+            logger.warning(
+                "continuity.red_team_unreadable_file", extra={"path": path}
+            )
+    return files
+
+
+async def _store_attacks(
+    session: AsyncSession,
+    run: MigrationRun,
+    assault: RedTeamReport,
+    *,
+    attempt_number: int,
+) -> None:
+    """Persist each attack as a security finding.
+
+    `recommendation` and `policy_decision` both carry the attack's severity
+    mapped through its category, because the Red Team is not a second opinion on
+    a category the way the Security Reviewer is — it found a distinct weakness,
+    and policy classifies that weakness once.
+    """
+    for item in assault.attacks:
+        decision = classify_category(item.category)
+        session.add(
+            SecurityFinding(
+                migration_run_id=run.id,
+                attempt_number=attempt_number,
+                category=item.category,
+                severity=item.severity,
+                summary=item.summary,
+                evidence=item.evidence.model_dump(mode="json"),
+                recommendation=decision,
+                policy_decision=decision,
+            )
+        )
+    if assault.attacks:
+        await session.flush()
+
+
+async def _record_red_team(
+    session: AsyncSession, run: MigrationRun, assault: RedTeamReport
+) -> None:
+    """Record that the attack *happened*, and what it covered.
+
+    Without this the delivery gate cannot tell a migration that survived an
+    attack from one nothing ever attacked, and would have to treat an empty
+    attack list as an assurance. It refuses instead.
+    """
+    tracked = await session.get(MigrationRun, run.id) or run
+    stored = dict(tracked.evidence_report or {})
+    stored[RED_TEAM_KEY] = assault.report()
     tracked.evidence_report = stored
     await session.flush()
 
