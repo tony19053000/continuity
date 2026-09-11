@@ -288,7 +288,7 @@ Nothing above is claimed as working beyond what the live tests prove.
 | --- | --- |
 | Branch | `main` (tracking `origin/main`) |
 | Latest commit | `fa941e1` — feat: security review, approval enforcement, and PR delivery |
-| Push state | **Phase 8 is committed locally but NOT pushed.** Phases 0–7 are on `origin/main`. The coding session's permission gate blocks `git push`; this is not a git or GitHub authentication problem — `gh` is authenticated and the remote is unchanged. Run `git push origin main` to publish Phase 8. |
+| Push state | **Five commits are local and NOT pushed** (`b024447`, `c12eee2`, `5736671`, `5136c2d`, `5da35ad`). Phases 0–7 are on `origin/main`; Phase 8, the pipeline wiring, the UI, and the product loop are not. The coding session's permission gate blocks `git push`; this is not a git or GitHub authentication problem — `gh` is authenticated and the remote is unchanged. Run `git push origin main` to publish them. |
 
 ---
 
