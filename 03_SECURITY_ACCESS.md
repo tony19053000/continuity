@@ -398,6 +398,20 @@ from the deterministic policy engine. When they disagree, the policy engine
 wins, and the disagreement is recorded — a persistent gap between the two is
 worth investigating.
 
+Implemented in two halves (C8-01). `backend/security/categories.py` detects
+every category code can decide — a credential is a regex match, a removed
+signature check is a token that was there and is not any more, a file outside
+the impact set is arithmetic — and runs whether or not a model is reachable, so
+the security floor does not depend on one being available.
+`backend/agents/security_reviewer.py` adds what the agent read, merged rather
+than substituted: a category code already found is never overwritten by the
+model's account of it, and the model cannot clear a finding code made.
+
+Each category maps to an `Action`, and policy classifies the action. A category
+with no mapping is DENY: adding one without deciding what it costs fails closed,
+and a test asserts the mapping is complete so that is a backstop rather than a
+routine path.
+
 ---
 
 ## 11. Security posture surface

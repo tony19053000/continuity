@@ -126,3 +126,57 @@ async def pending_for_run(
         )
     )
     return list(result.scalars().all())
+
+
+# ---------------------------------------------------------------------------
+# Enforcement (C8-02)
+# ---------------------------------------------------------------------------
+
+
+class ApprovalNotGranted(ContinuityError):
+    """A protected action was attempted without a current approval.
+
+    Distinct from `ApprovalRequired`, which asks for one. This is raised when a
+    gate is checked and the answer is no — the request exists and is PENDING,
+    or was REJECTED, or was approved and has since been revoked.
+    """
+
+    code = "approval_not_granted"
+    status_code = 403
+    message = "This action requires an approval that has not been granted."
+
+
+async def require_granted(
+    session: AsyncSession, approval_id: uuid.UUID, *, action: str
+) -> Approval:
+    """The gate a protected action passes through, immediately before acting.
+
+    Re-read from the database every time, on purpose. An approval granted at the
+    start of a run can be rejected before the action runs, and a decision cached
+    in memory would not notice. `03_SECURITY_ACCESS.md` §4: the check happens
+    immediately before the protected action, not when the run began.
+    """
+    approval = await session.get(Approval, approval_id)
+    if approval is None:
+        raise ApprovalNotGranted(f"{action} requires an approval that does not exist.")
+
+    # Expire and reload, so a decision written by another session — the HTTP
+    # request that rejected it — is visible here rather than served from this
+    # session's identity map.
+    await session.refresh(approval)
+
+    if approval.status is not ApprovalStatus.APPROVED:
+        raise ApprovalNotGranted(
+            f"{action} requires approval {approval_id}, which is "
+            f"{approval.status.value}."
+        )
+
+    if approval.actor_user_id is None:
+        # The CHECK constraint makes this unreachable through normal writes.
+        # Refusing anyway costs nothing and means a row written around the
+        # schema cannot authorise anything.
+        raise ApprovalNotGranted(
+            f"approval {approval_id} is APPROVED but names no approver."
+        )
+
+    return approval

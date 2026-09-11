@@ -30,10 +30,16 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.agents.contracts import AnalyzedChange, ImpactAnalystOutput
 from backend.agents.migration_engineer import MigrationPatch, produce_patch
+from backend.agents.security_reviewer import SecurityReview, review_patch
 from backend.agents.validator import Validation, validate
 from backend.migrations.workspace import MigrationWorkspace
 from backend.models import MigrationAttempt, MigrationRun, SecurityFinding
-from backend.models.enums import ActivityEventKind, AttemptOutcome, RunState
+from backend.models.enums import (
+    ActivityEventKind,
+    AttemptOutcome,
+    PolicyDecision,
+    RunState,
+)
 from backend.observability import events
 from backend.observability.logging import get_logger
 from backend.orchestration.coordinator import RunCoordinator
@@ -72,10 +78,24 @@ class RepairResult:
     final_state: RunState
     attempts: list[AttemptRecord] = field(default_factory=list)
     reason: str = ""
+    #: The security review of the patch that passed, when one passed. `None`
+    #: when the loop never reached a green suite — there is nothing to review.
+    review: SecurityReview | None = None
 
     @property
     def repaired(self) -> bool:
-        return self.final_state is RunState.VALIDATION_PASSED
+        """Whether the loop got the suite green.
+
+        Defined by an attempt passing rather than by the final state, because
+        the run continues into the security review afterwards — a patch can be
+        a successful repair and still be refused delivery, and conflating the
+        two would make "repaired" mean "shipped".
+        """
+        return any(attempt.passed for attempt in self.attempts)
+
+    @property
+    def security_passed(self) -> bool:
+        return self.final_state is RunState.SECURITY_REVIEW_PASSED
 
     @property
     def attempts_used(self) -> int:
@@ -136,6 +156,19 @@ async def run_repair_loop(
         if record.outcome is AttemptOutcome.PASSED:
             result.final_state = RunState.VALIDATION_PASSED
             result.reason = "tests passed"
+            # A green suite is not the end. The patch still has to survive the
+            # security review, and that review is what produces the findings a
+            # human decides on — so it runs here, in the live path, rather than
+            # only in its own tests.
+            await _review(
+                session,
+                run,
+                record,
+                impact_set=impact_set,
+                model_provider=model_provider,
+                coordinator=coordinator,
+                result=result,
+            )
             return result
 
         if record.outcome is AttemptOutcome.ESCALATED:
@@ -403,6 +436,14 @@ async def _store_attempt(
 async def _store_findings(
     session: AsyncSession, run: MigrationRun, patch: MigrationPatch
 ) -> None:
+    """Findings from the patch rules (C7-02).
+
+    These are deterministic, so the agent's recommendation and the policy
+    decision genuinely are the same value — code found it and policy classified
+    it, with no second opinion involved. The columns still differ in general:
+    the Security Reviewer's findings are written by `_review` below, and those
+    carry two independently-produced verdicts.
+    """
     for finding in patch.findings:
         session.add(
             SecurityFinding(
@@ -411,17 +452,124 @@ async def _store_findings(
                 severity=finding.severity,
                 summary=finding.summary,
                 evidence=finding.evidence().model_dump(mode="json"),
-                # The patch inspector is deterministic, so its recommendation
-                # and the policy decision are the same thing here. They are
-                # stored separately because the Security Reviewer agent (C8-01)
-                # will disagree with policy eventually, and that disagreement
-                # has to be visible.
                 recommendation=finding.policy_decision,
                 policy_decision=finding.policy_decision,
             )
         )
     if patch.findings:
         await session.flush()
+
+
+async def _review(
+    session: AsyncSession,
+    run: MigrationRun,
+    record: AttemptRecord,
+    *,
+    impact_set: list[str],
+    model_provider: ModelProvider,
+    coordinator: RunCoordinator,
+    result: RepairResult,
+) -> None:
+    """Review the patch that passed, and record what the review found.
+
+    This is where `recommendation` and `policy_decision` become genuinely
+    independent: the agent forms a view, the policy engine classifies the
+    category, and a disagreement between them is persisted rather than
+    reconciled (`03_SECURITY_ACCESS.md` §10).
+    """
+    patch = record.patch
+    if patch is None:  # pragma: no cover - a PASSED attempt always has one
+        return
+
+    await coordinator.advance(
+        session,
+        run,
+        to_state=RunState.SECURITY_REVIEW_RUNNING,
+        reason="reviewing the validated patch",
+        actor="security_reviewer",
+    )
+    await events.emit(
+        session,
+        kind=ActivityEventKind.SECURITY_REVIEW_STARTED,
+        actor="security_reviewer",
+        summary="Reviewing the validated patch",
+        project_id=run.project_id,
+        migration_run_id=run.id,
+    )
+
+    review = await review_patch(
+        provider_id=run.provider_id,
+        diff=patch.diff,
+        changed_dependencies=list(patch.new_dependencies),
+        modifies_tests=patch.modifies_tests,
+        impact_set=impact_set,
+        model_provider=model_provider,
+    )
+    result.review = review
+
+    for finding in review.findings:
+        session.add(
+            SecurityFinding(
+                migration_run_id=run.id,
+                category=finding.category,
+                severity=finding.severity,
+                summary=finding.summary,
+                evidence=finding.evidence.model_dump(mode="json"),
+                # Two verdicts, stored separately on purpose. When the agent
+                # says allow and policy says deny, both are in the row.
+                recommendation=finding.recommendation,
+                policy_decision=finding.policy_decision,
+            )
+        )
+    await session.flush()
+
+    if review.decision is PolicyDecision.ALLOW:
+        await coordinator.advance(
+            session,
+            run,
+            to_state=RunState.SECURITY_REVIEW_PASSED,
+            reason=review.summary[:500],
+            actor="security_reviewer",
+            detail={"findings": len(review.findings)},
+        )
+        result.final_state = RunState.SECURITY_REVIEW_PASSED
+        result.reason = "tests passed and the security review found nothing blocking"
+        return
+
+    # ASK and DENY both stop here. An unanswered question is not permission, and
+    # the difference between them is what the approval card says, not whether
+    # the run continues on its own.
+    target = (
+        RunState.APPROVAL_PENDING
+        if review.decision is PolicyDecision.ASK
+        else RunState.SECURITY_REVIEW_FAILED
+    )
+    await coordinator.advance(
+        session,
+        run,
+        to_state=target,
+        reason=(
+            f"security review returned {review.decision.value}: "
+            f"{len(review.blocking)} finding(s) require a decision"
+        ),
+        actor="security_reviewer",
+        detail={
+            "decision": review.decision.value,
+            "agent_recommendation": review.agent_recommendation.value,
+            "disagreements": len(review.disagreements),
+        },
+    )
+    result.final_state = target
+    result.reason = f"security review returned {review.decision.value}"
+
+    if review.disagreements:
+        logger.warning(
+            "continuity.security_review_disagreement_persisted",
+            extra={
+                "migration_run_id": str(run.id),
+                "count": len(review.disagreements),
+            },
+        )
 
 
 def _rejection_brief(record: AttemptRecord) -> list[str]:

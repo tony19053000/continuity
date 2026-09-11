@@ -1056,6 +1056,14 @@ Job kinds: `provider_monitor`, `repository_scan`, `integration_map`,
 `MERGE_WAITING` advances only when Continuity learns the PR's outcome. Two
 mechanisms, in order of preference (ticket C8-06):
 
+Implemented in `backend/github/webhooks.py` (receiver) and
+`backend/workers/pr_status_poll.py` (fallback). Both converge on one `settle()`,
+so there is exactly one place where a merge outcome becomes a state change and
+the two mechanisms cannot drift apart. A refusal is audited in its own
+transaction: the request's transaction rolls back when the 401 is raised, so an
+audit row written there would be discarded with it — and auditing refusals is
+most of the point of auditing an unauthenticated endpoint.
+
 1. **GitHub App webhook** — the App subscribes to the `pull_request` event
    (`closed`, with `merged: true|false`). This requires only the Pull requests:
    Read permission we already hold; the subscription is configured on the App,
@@ -1120,6 +1128,28 @@ reason; unavailable features are recorded as blockers, never faked.
 | 5 | **Evaluations** | Systematic agent evaluation once metrics exist. | 9 |
 | 6 | **Memory** | Persistent organizational decisions, e.g. "this team previously rejected `customers.write` for this provider" — genuinely useful, but only after approvals work. | 9, optional |
 | 7 | **Browser / Code Interpreter** | Only if they measurably improve provider-doc inspection or sandboxed execution beyond our own `ExecutionProvider`. | Evaluate in 9 |
+
+### What is actually integrated (C8-05)
+
+`backend/observability/agentcore.py` reports this from **live API calls**, and
+distinguishes three states rather than two:
+
+* **provisioned** — a resource exists. Only this counts as an integration, and
+  only this may be claimed in the UI, the README, or the evidence report.
+* **reachable, not provisioned** — the control-plane API answered with this
+  account's credentials, and nothing has been created. A permission, not an
+  integration.
+* **unavailable** — the call failed, recorded with the error's class.
+
+As of Phase 8 all five probed services are **reachable and unprovisioned** on
+account `726583840385` in `us-west-2`, so `integrated_services` is empty and
+nothing claims otherwise. Provisioning any of them creates billable AWS
+resources, which is the account owner's decision rather than Continuity's; the
+exact commands for each are in `SETUP_STEPS` beside the probe that reports it
+missing, and repeated in `STATUS.md` under B-05.
+
+Probing is read-only by construction. A probe that created a resource would
+make "is it provisioned" a question about itself.
 
 ---
 

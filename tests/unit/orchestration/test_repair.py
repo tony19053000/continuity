@@ -36,7 +36,7 @@ from backend.models import (
 from backend.models import (
     TestResult as StoredTestResult,
 )
-from backend.models.enums import AttemptOutcome, ChangeType, FindingCategory
+from backend.models.enums import AttemptOutcome, ChangeType, FindingCategory, Severity
 from backend.models.session import session_scope
 from backend.observability.execution_audit import NullExecutionAudit
 from backend.orchestration.coordinator import RunCoordinator
@@ -194,7 +194,10 @@ async def test_a_correct_patch_passes_on_the_first_attempt(
     result, client = await _loop(manager, run)
 
     assert result.repaired
-    assert result.final_state is RunState.VALIDATION_PASSED
+    # Past validation and through the security review, which found nothing.
+    assert result.final_state is RunState.SECURITY_REVIEW_PASSED
+    assert result.security_passed
+    assert result.review is not None and result.review.findings == []
     assert result.attempts_used == 1
     assert client == CLIENT_V2
 
@@ -588,6 +591,145 @@ async def test_an_engineer_that_never_produces_anything_stops_at_the_budget(
     assert "exhausted" in result.reason
 
 
+# --- the security review, in the live path -------------------------------
+
+
+async def test_a_validated_patch_is_reviewed_before_the_run_can_proceed(
+    manager: WorkspaceManager, scripted: Any
+) -> None:
+    """A green suite is not the end of the run.
+
+    Found by a reviewer: the security review existed and was well tested, and
+    nothing called it. A review that only runs in its own tests reviews nothing.
+    """
+    from backend.models import StateTransition
+
+    scripted(fix_it())
+    run = await _run_row()
+
+    result, _ = await _loop(manager, run)
+
+    assert result.review is not None
+    assert result.final_state is RunState.SECURITY_REVIEW_PASSED
+
+    async with session_scope() as session:
+        states = [
+            t.to_state
+            for t in (
+                await session.execute(
+                    select(StateTransition).where(
+                        StateTransition.migration_run_id == run.id
+                    )
+                )
+            ).scalars()
+        ]
+
+    assert RunState.SECURITY_REVIEW_RUNNING in states
+    assert RunState.SECURITY_REVIEW_PASSED in states
+
+
+async def test_a_blocking_finding_in_the_review_stops_the_run(
+    manager: WorkspaceManager, scripted: Any
+) -> None:
+    """The patch passes its tests and still does not proceed.
+
+    The patch widens the OAuth scopes it asks for. That is valid code — the
+    suite still goes green — and it is exactly the kind of change a person
+    should see before it ships.
+    """
+    scripted(
+        output(
+            edit(
+                "app/client.py",
+                CLIENT_V2 + '\nSCOPES = ["customers.read", "customers.write"]\n',
+            )
+        )
+    )
+    run = await _run_row()
+
+    result, _ = await _loop(manager, run)
+
+    assert result.repaired, "the suite should still have gone green"
+    assert result.review is not None
+    assert not result.security_passed
+    assert result.final_state in {
+        RunState.APPROVAL_PENDING,
+        RunState.SECURITY_REVIEW_FAILED,
+    }
+
+
+async def test_a_review_disagreement_is_persisted_with_both_verdicts(
+    manager: WorkspaceManager, scripted: Any, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """C8-01 acceptance, in the live write path rather than in a dataclass.
+
+    A reviewer caught that the two columns were always equal in production,
+    because the only code writing findings wrote the same value twice. This
+    drives a real run in which the agent says allow and policy says deny, and
+    reads both back out of the row.
+    """
+    from backend.agents import security_reviewer as reviewer_module
+    from backend.agents.contracts import ProposedFinding, SecurityReviewerOutput
+    from backend.models.enums import Confidence, EvidenceKind, FindingCategory, PolicyDecision
+    from backend.models.schemas import Evidence
+
+    class AgreeableReviewer:
+        async def run_structured(self, **_: Any) -> Any:
+            return SecurityReviewerOutput(
+                findings=[
+                    ProposedFinding(
+                        category=FindingCategory.AUTHORIZATION_WEAKENED,
+                        severity=Severity.LOW,
+                        summary="The check it removed looked redundant to me.",
+                        evidence=Evidence(
+                            kind=EvidenceKind.SOURCE,
+                            confidence=Confidence.INFERRED,
+                            file_path="app/client.py",
+                            excerpt="removed guard",
+                        ),
+                        recommendation=PolicyDecision.ALLOW,
+                    )
+                ],
+                overall_recommendation=PolicyDecision.ALLOW,
+                summary="Nothing here concerns me.",
+            )
+
+    original = reviewer_module.SecurityReviewerAgent
+
+    class Patched(original):  # type: ignore[misc, valid-type]
+        def __init__(self, provider: Any, **kwargs: Any) -> None:
+            super().__init__(provider, runner=AgreeableReviewer(), **kwargs)
+
+    monkeypatch.setattr(reviewer_module, "SecurityReviewerAgent", Patched)
+
+    scripted(fix_it())
+    run = await _run_row()
+
+    result, _ = await _loop(manager, run)
+
+    async with session_scope() as session:
+        findings = list(
+            (
+                await session.execute(
+                    select(SecurityFinding).where(SecurityFinding.migration_run_id == run.id)
+                )
+            ).scalars()
+        )
+
+    (finding,) = [
+        f for f in findings if f.category is FindingCategory.AUTHORIZATION_WEAKENED
+    ]
+
+    # Both verdicts, from the row, genuinely different.
+    assert finding.recommendation is PolicyDecision.ALLOW
+    assert finding.policy_decision is PolicyDecision.DENY
+    assert finding.recommendation is not finding.policy_decision
+
+    # And policy won: the run did not pass review.
+    assert not result.security_passed
+    assert result.review is not None and len(result.review.disagreements) == 1
+
+
 # --- the run's history ---------------------------------------------------
 
 
@@ -620,5 +762,6 @@ async def test_the_run_walks_the_states_the_machine_allows(
             f"recorded an illegal move: {step.from_state} -> {step.to_state}"
         )
 
-    assert transitions[-1].to_state is RunState.VALIDATION_PASSED
+    assert transitions[-1].to_state is RunState.SECURITY_REVIEW_PASSED
     assert RunState.REPAIR_RUNNING in {t.to_state for t in transitions}
+    assert RunState.VALIDATION_PASSED in {t.to_state for t in transitions}

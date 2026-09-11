@@ -425,6 +425,7 @@ source = { editable = "." }
 dependencies = [
     { name = "alembic" },
     { name = "authlib" },
+    { name = "boto3" },
     { name = "fastapi" },
     { name = "httpx" },
     { name = "itsdangerous" },
@@ -452,6 +453,7 @@ requires-dist = [
     { name = "aiosqlite", marker = "extra == 'dev'", specifier = ">=0.20" },
     { name = "alembic", specifier = ">=1.14" },
     { name = "authlib", specifier = ">=1.4" },
+    { name = "boto3", specifier = ">=1.35" },
     { name = "fastapi", specifier = ">=0.115" },
     { name = "httpx", specifier = ">=0.28" },
     { name = "itsdangerous", specifier = ">=2.2" },

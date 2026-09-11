@@ -113,3 +113,43 @@ def contains_secret(text: str) -> bool:
 def detected_secret_kinds(text: str) -> list[str]:
     """Names of every secret pattern matching `text`, for security findings."""
     return [name for name, pattern in _PATTERNS if pattern.search(text)]
+
+
+def redact_deep(value: object, _depth: int = 0) -> object:
+    """Redact a structured value, however it is nested.
+
+    Lives here rather than in `observability/logging.py`, where it started: it
+    is a redaction concern, and the approval API needs it too — a requested
+    action is assembled from an agent's proposal and may quote an argument.
+
+    Redacting only top-level strings is not enough: the natural way to log agent
+    context is `extra={"tool_args": {...}}`, and a credential inside that dict
+    would pass straight through. Anything that is not a plain container is
+    stringified and redacted, because `JsonFormatter` will serialise it with
+    `default=str` anyway — so an object whose `__repr__` embeds a token would
+    otherwise leak.
+
+    `_depth` guards against a pathologically nested or self-referential
+    structure; past the limit the value is rendered as a redacted string rather
+    than recursed into.
+    """
+    if _depth > 6:
+        return redact(str(value))
+
+    match value:
+        case str():
+            return redact(value)
+        case bool() | int() | float() | None:
+            # Numbers cannot carry a secret pattern; leave them typed so the
+            # JSON output stays useful for querying.
+            return value
+        case dict():
+            return {k: redact_deep(v, _depth + 1) for k, v in value.items()}
+        case list():
+            return [redact_deep(item, _depth + 1) for item in value]
+        case tuple():
+            return [redact_deep(item, _depth + 1) for item in value]
+        case set() | frozenset():
+            return [redact_deep(item, _depth + 1) for item in value]
+        case _:
+            return redact(str(value))

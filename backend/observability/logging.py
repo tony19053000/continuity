@@ -14,7 +14,7 @@ import sys
 from datetime import UTC, datetime
 from typing import Any
 
-from backend.shared.redaction import redact
+from backend.shared.redaction import redact, redact_deep
 
 # Attributes present on every LogRecord; anything else was supplied by the
 # caller via `extra=` and is treated as structured context.
@@ -48,47 +48,11 @@ class RedactingFilter(logging.Filter):
         for key, value in list(record.__dict__.items()):
             if key in _STANDARD_ATTRS:
                 continue
-            record.__dict__[key] = _redact_deep(value)
+            record.__dict__[key] = redact_deep(value)
 
         if record.exc_text:
             record.exc_text = redact(record.exc_text)
         return True
-
-
-def _redact_deep(value: object, _depth: int = 0) -> object:
-    """Redact a structured log value, however it is nested.
-
-    Redacting only top-level strings is not enough: the natural way to log agent
-    context is `extra={"tool_args": {...}}`, and a credential inside that dict
-    would pass straight through. Anything that is not a plain container is
-    stringified and redacted, because `JsonFormatter` will serialise it with
-    `default=str` anyway — so an object whose `__repr__` embeds a token would
-    otherwise leak.
-
-    `_depth` guards against a pathologically nested or self-referential
-    structure; past the limit the value is rendered as a redacted string rather
-    than recursed into.
-    """
-    if _depth > 6:
-        return redact(str(value))
-
-    match value:
-        case str():
-            return redact(value)
-        case bool() | int() | float() | None:
-            # Numbers cannot carry a secret pattern; leave them typed so the
-            # JSON output stays useful for querying.
-            return value
-        case dict():
-            return {k: _redact_deep(v, _depth + 1) for k, v in value.items()}
-        case list():
-            return [_redact_deep(item, _depth + 1) for item in value]
-        case tuple():
-            return [_redact_deep(item, _depth + 1) for item in value]
-        case set() | frozenset():
-            return [_redact_deep(item, _depth + 1) for item in value]
-        case _:
-            return redact(str(value))
 
 
 class JsonFormatter(logging.Formatter):

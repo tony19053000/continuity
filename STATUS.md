@@ -7,20 +7,26 @@ message disagrees with it, this file is right and the other is stale.
 
 ## Overall completion
 
-**80%**
+**90%**
 
-Phases 0–7 complete. Continuity now writes the patch. Each migration runs in an
-isolated git worktree — the user's checkout is byte-identical afterwards — and
-every proposed edit is checked before a byte reaches disk: out of scope,
-credential-shaped, or removing a test, and it is discarded. Tests are discovered
-from the project's own files, run through the confined executor, and parsed from
-real output. When the patch fails, the repair loop responds to the evidence,
-bounded by a budget counted from database rows. Test suite has **zero skips**.
+Phases 0–8 complete. Continuity now reviews its own patch and asks a human when
+it must. Thirteen finding categories are detected — most by code rather than by
+a model — and the policy engine, not the reviewer, decides; a run whose tests
+pass still stops at `SECURITY_REVIEW_PASSED` or `APPROVAL_PENDING` depending on
+what the review found. Approving is something only an authenticated person can
+do, re-checked at the instant it is relied on rather than trusted from earlier
+in the run.
+
+**Delivery is built and tested but not yet invoked by a live run.** The branch,
+commit, and pull request path exists with all three refusal gates, and every
+figure in the pull request body traces to a named database column — but nothing
+calls `deliver()` outside its own tests. Connecting `SECURITY_REVIEW_PASSED`
+through approval to delivery is Phase 9. Test suite has **zero skips**.
 
 | Field | Value |
 | --- | --- |
-| Current phase | Phase 8 — Security + approval + GitHub PR |
-| Current ticket | C8-01 |
+| Current phase | Phase 9 — Production security + frontend + polish |
+| Current ticket | C9-01 |
 | Last updated | 2026-09-11 |
 
 ---
@@ -37,17 +43,17 @@ bounded by a budget counted from database rows. Test suite has **zero skips**.
 | 5 | Provider monitoring + Change Scout | 60% | **DONE** — reviewer PASS |
 | 6 | Execution safety, impact analysis, rehearsal | 70% | **DONE** — reviewer PASS |
 | 7 | Migration Engineer + repair loop | 80% | **DONE** — reviewer PASS |
-| 8 | Security + approval + GitHub PR | 90% | PENDING |
+| 8 | Security + approval + GitHub PR | 90% | **DONE** — reviewer PASS |
 | 9 | Production security + frontend + polish | 100% | PENDING |
 
 ---
 
 ## Tickets
 
-**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05, C6-01 … C6-04, C7-01 … C7-04
+**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05, C6-01 … C6-04, C7-01 … C7-04, C8-01 … C8-06
 **In progress:** none
-**Next:** C8-01 — see `05_FEATURE_TICKETS.md`
-**Pending:** C8-01 onward
+**Next:** C9-01 — see `05_FEATURE_TICKETS.md`
+**Pending:** C9-01 onward
 
 ---
 
@@ -98,11 +104,41 @@ consent screen. That last step is a manual check, not an automatable one.
 `DevelopmentIsolatedExecutor` remains functional. The UI reports
 `TEE Attestation: Not Configured`. **Attestation is never faked.**
 
-### B-05 · AgentCore not yet provisioned — **OPEN**, expected
+### B-05 · AgentCore reachable but not provisioned — **OPEN**, deliberate
 
-Not a regression: AgentCore is Phase 8 (C8-05). AWS access is now verified, so
-the prerequisite is met. `BedrockAgentCoreFullAccess` is attached to the
-`continuity-dev` user.
+Verified live in Phase 8 against account `726583840385` in `us-west-2`. All five
+probed services answer their control-plane API with these credentials and hold
+**zero resources**:
+
+| Service | State |
+| --- | --- |
+| Runtime | reachable, not provisioned |
+| Identity | reachable, not provisioned |
+| Gateway | reachable, not provisioned |
+| Memory | reachable, not provisioned |
+| Observability (CloudWatch) | reachable, not provisioned |
+
+So `integrated_services` is empty, and **nothing in the UI, the README, or the
+evidence report claims AgentCore integration**. `backend/observability/agentcore.py`
+reports these three states from live calls and never rounds "reachable" up to
+"integrated".
+
+This is not a blocked prerequisite — the permissions are in place. Provisioning
+any of these creates billable AWS resources, which is the account owner's
+decision rather than something Continuity should do on its own. Exact setup
+steps live in `SETUP_STEPS` in that module, beside the probe that reports each
+service missing, so they cannot drift. In short:
+
+- **Runtime** — build and push a container image to ECR, create an execution
+  role trusting `bedrock-agentcore.amazonaws.com`, then
+  `aws bedrock-agentcore-control create-agent-runtime`.
+- **Identity** — `aws bedrock-agentcore-control create-workload-identity
+  --name continuity-provider-tokens`, then move credentials out of `.env`.
+- **Gateway** — `create-gateway --protocol-type MCP`, and only if it
+  demonstrably enforces something `backend/security/policy.py` does not.
+- **Memory** — `create-memory`, Phase 9 and only once approvals are in use.
+- **Observability** — enable Transaction Search, then point an OTEL exporter at
+  CloudWatch; log groups appear with the runtime's first span.
 
 ### B-06 · No scheduler process — **OPEN**, recorded at the Phase 5 review
 
@@ -127,12 +163,12 @@ running". Scheduling infrastructure belongs with deployment (Phase 8, C8-05).
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **925 passing, 0 skipped** |
-| Security | `uv run pytest tests/security` | **277 passing** |
+| Python unit + integration | `uv run pytest` | **1083 passing, 0 skipped** |
+| Security | `uv run pytest tests/security` | **322 passing** |
 | Frontend unit | `npm run test` | **17 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
-| Typecheck (py) | `uv run mypy backend` | **Passing** (77 source files) |
+| Typecheck (py) | `uv run mypy backend` | **Passing** (85 source files) |
 | Lint (web) | `npm run lint` | **Passing** |
 | Typecheck (web) | `npm run typecheck` | **Passing** |
 | Build (web) | `npm run build` | **Passing** — routes `/`, `/signin` |
@@ -149,6 +185,10 @@ running". Scheduling infrastructure belongs with deployment (Phase 8, C8-05).
 | Patch rules | `uv run pytest tests/unit/agents/test_migration_engineer.py` | **40 passing** — scope, secrets, tests, dependencies |
 | Repair loop | `uv run pytest tests/unit/orchestration/test_repair.py` | **18 passing** — real pytest runs, budget counted from rows |
 | Live migration | `uv run pytest tests/integration/test_phase7_live.py` | **3 passing** — Gemini patches a real project; 15/15 consecutive |
+| Security review | `uv run pytest tests/unit/security` | **62 passing** — one fixture diff per finding category |
+| Approval integrity | `uv run pytest tests/security/test_approval_integrity.py` | **16 passing** — self-approval, revoke race, restart |
+| Webhook integrity | `uv run pytest tests/security/test_webhook_integrity.py` | **24 passing** — signature, replay, polling fallback |
+| Live AgentCore probe | `uv run pytest tests/integration/test_agentcore.py` | **8 passing** — real AWS, all five services reachable, none provisioned |
 
 Counts above are from real runs, not estimates.
 
@@ -193,8 +233,8 @@ Nothing above is claimed as working beyond what the live tests prove.
 | --- | --- |
 | GitHub App | **Installed and verified live** — `Continuity Integration Agent`, app id 4900912 |
 | Repository authorization | **Verified** — `tony19053000/continuity` only; others refused |
-| Branch/PR delivery | Not implemented (Phase 8) |
-| Merge detection | Not implemented (C8-06) |
+| Branch/PR delivery | **Implemented** (C8-03) — branch-and-PR only; no force push, merge, or default-branch write exists to call |
+| Merge detection | **Implemented** (C8-06) — webhook receiver + polling fallback. Webhooks are **disabled**: no signing secret is set, so every delivery is refused and audited. Polling is the active path |
 | Local `gh` CLI | Authenticated as `tony19053000` |
 | Remote `origin` | `https://github.com/tony19053000/continuity.git` |
 
@@ -923,3 +963,119 @@ any output at all — the same failure `Evidence` caused in C4-03.
 
 **Next intended task:** Phase 8, C8-01 — the Security Reviewer, the approval
 gate, and branch-and-PR delivery.
+
+---
+
+### 2026-09-11 — Phase 8, security review, approval, and delivery
+
+**What was built:** The part that decides whether the patch should exist, asks a
+person when it must, and delivers it the only safe way there is. The Security
+Reviewer (C8-01), the approval API and its enforcement gate (C8-02), branch-and-PR
+delivery (C8-03), the evidence report (C8-04), a live AgentCore probe (C8-05),
+and merge detection (C8-06).
+
+**The security review is two halves, and the split is the point.** Code detects
+every category it can decide — a credential is a regex match, a removed
+signature check is a token that was there and is not any more, a file outside
+the impact set is arithmetic — and runs whether or not a model is reachable, so
+the floor does not depend on one being available. The agent adds what it read.
+Neither decides: `backend/security/policy.py` maps each category to an action
+and classifies it, and the agent's recommendation is stored *beside* the binding
+decision precisely so a disagreement is visible.
+
+All 13 finding categories have a fixture diff, parametrized over the enum rather
+than a hand-written list — a member added later fails the module until someone
+decides what it costs.
+
+**Verification:** All 8 gate checks pass. 1083 backend tests (up from 925), 322
+security, 17 frontend, **0 skips**. The AgentCore probe runs against real AWS.
+
+**Defects found during implementation:**
+
+1. **A refused webhook delivery left no audit trail.** The endpoint wrote the
+   audit row on the request's session and then raised a 401 — and the request
+   transaction rolls back on the way out, discarding it. Auditing refusals is
+   most of the point of auditing an unauthenticated endpoint, so the row now
+   commits in its own transaction.
+
+2. **A decision body could name its own approver and be silently ignored.** The
+   field was never read, so it was safe — but a caller sending `actor_user_id`
+   believes they attributed the decision to someone, and on this endpoint that
+   misunderstanding matters. The schema now refuses unknown fields.
+
+3. **Delivery skipped two states.** `PR_PENDING → PR_CREATING → PR_CREATED →
+   MERGE_WAITING`, and I had it jumping straight to the end. The state machine
+   declined the illegal move silently, exactly as it did for the rehearsal in
+   Phase 6 and the repair loop in Phase 7.
+
+4. **`..` survived branch-name slugging.** Git refuses such refs, so nothing
+   would have broken — but relying on GitHub to reject a name Continuity built
+   from an external document is the wrong place for that check.
+
+5. **The AgentCore probe ignored the configured AWS profile.** It fell back to
+   the ambient chain, so all eight tests skipped under `scripts/verify.sh` while
+   passing for anyone who happened to have the profile exported — and the suite
+   quietly stopped having zero skips.
+
+6. **`boto3` was only a transitive dependency.** Continuity imports it directly
+   now; a transitive dependency can disappear in a minor release of its parent.
+
+**A Phase 3 security test had to be amended, carefully.** It asserted the GitHub
+client was read-only, which it was until delivery existed. The forbidden list is
+unchanged — force-push, merge, delete, rewrite, reset, squash, rebase are still
+absent by construction — and the six writes delivery needs are now pinned one by
+one. `update_branch` sends no `force`, so GitHub refuses a non-fast-forward
+update and a failed migration cannot overwrite a reviewer's commit.
+
+**On AgentCore, plainly:** all five services are reachable and **none are
+provisioned**. That is verified by live API calls, not assumed, and
+`integrated_services` is empty — so nothing anywhere claims AgentCore
+integration. The permissions are in place; provisioning creates billable AWS
+resources, which is the account owner's call. See B-05 for the exact commands.
+
+**On webhooks, plainly:** the receiver is implemented and tested, and webhooks
+are **off** — no signing secret is configured, so every delivery is refused with
+a 401 and audited. Accepting unsigned deliveries would let anyone who can reach
+the URL advance a migration run. Merge detection therefore runs through the
+polling fallback.
+
+**Found by the reviewer, and fixed:**
+
+- **`update_branch` used POST where GitHub requires PATCH.** POST to
+  `/git/refs` creates a ref; PATCH to `/git/refs/{ref}` updates one, and POSTing
+  to the update path is not an endpoint at all. Delivery would have created a
+  branch and a commit against real GitHub and then silently failed to attach one
+  to the other — while every mocked test passed. Exactly the class of defect a
+  fake API hides. Fixed with a `_patch` helper and a regression test that reads
+  the parsed code rather than the docstring.
+
+- **The Security Reviewer was never invoked by a run.** It existed, it was well
+  tested, and nothing called it — so `recommendation` and `policy_decision` were
+  always written equal in the live path, and the "disagreement is persisted"
+  property held only inside a unit test. `review_patch` now runs in the repair
+  loop the moment a suite goes green, and a test drives a real run in which the
+  agent says allow, policy says deny, and both come back out of the row.
+
+**What is NOT built:**
+- Nothing wires the stages into one continuous pass, and in particular nothing
+  calls `deliver()`. `SECURITY_REVIEW_PASSED` is where a successful run now
+  stops. Each stage is tested end to end on its own inputs; the pipeline is
+  Phase 9.
+- No frontend for approvals, findings, or the evidence report — the API exists,
+  the pages do not.
+- Partial delivery is not recovered. If GitHub creates the branch and the pull
+  request call then fails, the transaction rolls back while the branch remains.
+  The next attempt finds the ref present and refuses rather than reusing it,
+  because a branch that already exists may carry someone else's commits.
+
+**Do not accidentally change:**
+- `classify_category` returning DENY for an unmapped category.
+- The deterministic detectors running before, and independently of, the agent.
+- `require_granted` re-reading the approval row. The revoke-between-grant-and-
+  execute race is a real test, and it only passes because of that re-read.
+- `hmac.compare_digest` in `signature_matches`.
+- The audit row for a refused delivery committing in its own transaction.
+- `settle()` being the single place a merge outcome becomes a state change.
+
+**Next intended task:** Phase 9 — production security hardening, the frontend,
+and the end-to-end pipeline that connects every stage built so far.

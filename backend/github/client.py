@@ -203,6 +203,50 @@ class GitHubAppClient:
             raise GitHubError(f"GitHub returned {response.status_code} for {path}.")
         return response.json()
 
+    async def _patch(self, path: str, payload: dict[str, Any]) -> Any:
+        """Update an existing resource.
+
+        Separate from `_post` because GitHub's git-data API distinguishes them:
+        POST to `/git/refs` *creates* a ref, and PATCH to `/git/refs/{ref}`
+        *updates* one. POSTing to the update path is not a valid endpoint — it
+        fails against real GitHub while passing happily against a fake, which is
+        exactly how this was wrong before a reviewer caught it.
+        """
+        token = await self._installation_token()
+        response = await self._http.patch(
+            f"{GITHUB_API}{path}",
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": API_VERSION,
+            },
+            json=payload,
+        )
+        if response.status_code >= 400:
+            raise GitHubError(f"GitHub returned {response.status_code} for {path}.")
+        return response.json()
+
+    async def _post(self, path: str, payload: dict[str, Any]) -> Any:
+        """A write. Same token discipline as `_get`: minted, used, never logged.
+
+        Kept separate from `_get` so every write in Continuity is findable by
+        one grep, and so the error message can never carry a payload — a commit
+        body or a PR description could quote a secret the filter missed.
+        """
+        token = await self._installation_token()
+        response = await self._http.post(
+            f"{GITHUB_API}{path}",
+            headers={
+                "Authorization": f"token {token}",
+                "Accept": "application/vnd.github+json",
+                "X-GitHub-Api-Version": API_VERSION,
+            },
+            json=payload,
+        )
+        if response.status_code >= 400:
+            raise GitHubError(f"GitHub returned {response.status_code} for {path}.")
+        return response.json()
+
     # --- authorized repositories ---
 
     async def list_repositories(self) -> list[GitHubRepository]:
@@ -274,6 +318,89 @@ class GitHubAppClient:
         import base64
 
         return base64.b64decode(body["content"]).decode("utf-8", errors="replace")
+
+    # --- writes (C8-03) ---
+    #
+    # Everything below is branch-and-PR only. There is no method here that
+    # force-pushes, rewrites history, writes to a default branch, or merges —
+    # not because a caller would be refused, but because the call does not
+    # exist to make (`CLAUDE.md` §3.4).
+
+    async def get_ref(self, owner: str, name: str, ref: str) -> str:
+        """The commit a ref points at."""
+        await self._require_authorized(f"{owner}/{name}")
+        body = await self._get(f"/repos/{owner}/{name}/git/ref/{ref}")
+        return str(body["object"]["sha"])
+
+    async def create_branch(
+        self, owner: str, name: str, *, branch: str, from_sha: str
+    ) -> str:
+        """Create a new ref. Fails if it already exists, by design."""
+        await self._require_authorized(f"{owner}/{name}")
+        body = await self._post(
+            f"/repos/{owner}/{name}/git/refs",
+            {"ref": f"refs/heads/{branch}", "sha": from_sha},
+        )
+        return str(body["object"]["sha"])
+
+    async def create_blob(self, owner: str, name: str, *, content: str) -> str:
+        await self._require_authorized(f"{owner}/{name}")
+        body = await self._post(
+            f"/repos/{owner}/{name}/git/blobs",
+            {"content": content, "encoding": "utf-8"},
+        )
+        return str(body["sha"])
+
+    async def create_tree(
+        self, owner: str, name: str, *, base_tree: str, entries: list[dict[str, Any]]
+    ) -> str:
+        await self._require_authorized(f"{owner}/{name}")
+        body = await self._post(
+            f"/repos/{owner}/{name}/git/trees",
+            {"base_tree": base_tree, "tree": entries},
+        )
+        return str(body["sha"])
+
+    async def create_commit(
+        self, owner: str, name: str, *, message: str, tree: str, parents: list[str]
+    ) -> str:
+        await self._require_authorized(f"{owner}/{name}")
+        body = await self._post(
+            f"/repos/{owner}/{name}/git/commits",
+            {"message": message, "tree": tree, "parents": parents},
+        )
+        return str(body["sha"])
+
+    async def update_branch(
+        self, owner: str, name: str, *, branch: str, sha: str
+    ) -> None:
+        """Move one of Continuity's own branches forward.
+
+        PATCH, which is what GitHub's "update a reference" endpoint requires.
+
+        No `force` parameter is sent, and none is accepted: GitHub defaults it
+        to false, so a non-fast-forward update fails there rather than rewriting
+        anything.
+        """
+        await self._require_authorized(f"{owner}/{name}")
+        await self._patch(
+            f"/repos/{owner}/{name}/git/refs/heads/{branch}", {"sha": sha}
+        )
+
+    async def create_pull_request(
+        self, owner: str, name: str, *, title: str, body: str, head: str, base: str
+    ) -> dict[str, Any]:
+        await self._require_authorized(f"{owner}/{name}")
+        created = await self._post(
+            f"/repos/{owner}/{name}/pulls",
+            {"title": title, "body": body, "head": head, "base": base},
+        )
+        return dict(created)
+
+    async def get_pull_request(self, owner: str, name: str, number: int) -> dict[str, Any]:
+        """One pull request's current state, for the polling fallback (C8-06)."""
+        await self._require_authorized(f"{owner}/{name}")
+        return dict(await self._get(f"/repos/{owner}/{name}/pulls/{number}"))
 
     async def aclose(self) -> None:
         await self._http.aclose()

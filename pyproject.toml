@@ -21,6 +21,11 @@ dependencies = [
     "pyjwt[crypto]>=2.10",
     # Provider specs are commonly served as YAML rather than JSON.
     "pyyaml>=6.0",
+    # AgentCore and AWS status probes (C8-05). Available transitively through
+    # Strands, but declared here because Continuity imports it directly and a
+    # transitive dependency can disappear in a minor release of its parent.
+    # `03_SECURITY_ACCESS.md` §9 names the official AWS SDK as preferred.
+    "boto3>=1.35",
 ]
 
 [project.optional-dependencies]
@@ -106,5 +111,5 @@ warn_unreachable = true
 plugins = ["pydantic.mypy"]
 
 [[tool.mypy.overrides]]
-module = ["authlib.*"]
+module = ["authlib.*", "boto3.*", "botocore.*"]
 ignore_missing_imports = true
