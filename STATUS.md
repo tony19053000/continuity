@@ -201,8 +201,8 @@ Nothing above is claimed as working beyond what the live tests prove.
 | Field | Value |
 | --- | --- |
 | Branch | `main` (tracking `origin/main`) |
-| Latest commit | `9d6af23` — feat: autonomous provider monitoring and the Change Scout |
-| Push state | **Phase 5 is committed locally but NOT pushed.** The push was blocked by the coding-session permission gate, not by git or GitHub authentication — `gh` is still authenticated and the remote is unchanged. Run `git push origin main` to publish. Phases 0–4 are on `origin/main`. |
+| Latest commit | `3aaf6af` — feat: execution containment, impact analysis, and rehearsal |
+| Push state | **Phase 6 is committed locally but NOT pushed.** Phases 0–5 are on `origin/main` (Phase 5 was pushed manually after the coding session's permission gate blocked it). The gate is not a git or GitHub authentication problem — `gh` is authenticated and the remote is unchanged. Run `git push origin main` to publish Phase 6. |
 
 ---
 
