@@ -15,6 +15,7 @@ import { Changes } from "./Changes";
 import { GraphView } from "./GraphView";
 import { Integrations } from "./Integrations";
 import { ProjectOverview } from "./ProjectOverview";
+import { RunNow } from "./RunNow";
 import { Runs } from "./Runs";
 import { SecurityPage } from "./SecurityPage";
 
@@ -55,7 +56,15 @@ export function ProjectTabs({ projectId }: { projectId: string }) {
         ))}
       </nav>
 
-      {tab === "overview" ? <ProjectOverview projectId={projectId} /> : null}
+      {tab === "overview" ? (
+        <>
+          {/* Above the overview on purpose: the first thing someone wants
+              from this page is to make the product do something and watch
+              what it does. */}
+          <RunNow projectId={projectId} />
+          <ProjectOverview projectId={projectId} />
+        </>
+      ) : null}
       {tab === "integrations" ? <Integrations projectId={projectId} /> : null}
       {tab === "changes" ? <Changes projectId={projectId} /> : null}
       {tab === "runs" ? <Runs projectId={projectId} /> : null}

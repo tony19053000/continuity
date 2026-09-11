@@ -367,3 +367,36 @@ export const importRepository = (
 
 export const scanProject = (projectId: string): Promise<ScanResult> =>
   request<ScanResult>(`/projects/${projectId}/scan`, { method: "POST" });
+
+/** One stage of a hand-triggered pass. */
+export interface RunStage {
+  name: string;
+  detail: string;
+}
+
+/**
+ * What one pass of the whole product did.
+ *
+ * `limitations` is the field that matters when nothing happens: a pass that
+ * checked no providers because none are configured looks exactly like a pass
+ * that found nothing, and they are very different answers.
+ */
+export interface RunNowResult {
+  project_id: string;
+  /** Providers this project depends on. */
+  providers_seen: number;
+  /** How many of them an adapter is actually watching. */
+  providers_monitored: number;
+  /** Why each of the rest was skipped. */
+  unmonitored: string[];
+  changes_recorded: number;
+  relevant: number;
+  runs: Record<string, unknown>[];
+  pull_requests: number[];
+  stopped_at: string;
+  stages: RunStage[];
+  limitations: string[];
+}
+
+export const runProjectNow = (projectId: string): Promise<RunNowResult> =>
+  request<RunNowResult>(`/projects/${projectId}/run`, { method: "POST" });

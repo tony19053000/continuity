@@ -9,7 +9,10 @@ What it guarantees, and why each matters:
 
 * **No overlapping passes for one project.** A tick that arrives while the
   previous one is still working is skipped, not queued. Two pipelines on one
-  project would fight over the same migration runs and the same workspace.
+  project would fight over the same migration runs and the same workspace. The
+  guard lives in `backend/orchestration/in_flight.py` rather than on this class,
+  because the API can start the same pass by hand and a guard only this loop
+  could see would not be one.
 * **One project's failure does not stop the sweep.** An unreachable provider or
   a broken repository must not silently halt monitoring for everyone else.
 * **Shutdown is clean and bounded.** The loop is cancellable, and a cancelled
@@ -33,19 +36,17 @@ from typing import Any
 
 from sqlalchemy import select
 
-from backend.models import Project, RunState
+from backend.models import Project
 from backend.models.session import session_scope
 from backend.observability.logging import get_logger
+from backend.orchestration.in_flight import (
+    MONITORABLE,
+    PassAlreadyRunning,
+    exclusive_pass,
+)
 from backend.orchestration.pipeline import PipelineResult, run_pipeline
 
 logger = get_logger(__name__)
-
-#: States a project must be in for a pass to start. A project mid-migration is
-#: already being worked on; starting a second pass would open a competing run.
-MONITORABLE: frozenset[RunState] = frozenset(
-    {RunState.MONITORING_ACTIVE, RunState.CHANGE_IRRELEVANT, RunState.VERIFIED}
-)
-
 
 @dataclass(slots=True)
 class TickResult:
@@ -95,9 +96,6 @@ class ProviderScheduler:
         self._pipeline_factory = pipeline_factory
         self._poll_factory = poll_factory
         self._task: asyncio.Task[None] | None = None
-        #: Projects with a pass in flight. The reason a slow project does not
-        #: accumulate overlapping pipelines.
-        self._in_flight: set[uuid.UUID] = set()
         self.ticks = 0
         self.last_tick: TickResult | None = None
 
@@ -167,14 +165,16 @@ class ProviderScheduler:
             if state not in MONITORABLE:
                 result.skipped[str(project_id)] = f"state is {state.value}"
                 continue
-            if project_id in self._in_flight:
-                result.skipped[str(project_id)] = "a pass is already running"
-                continue
 
-            self._in_flight.add(project_id)
             try:
-                result.results.append(await self._run_one(project_id))
-                result.checked.append(project_id)
+                # The guard is shared with `POST /projects/{id}/run`, because a
+                # person pressing that button makes the same `run_pipeline`
+                # call. A guard only this loop could see would not be a guard.
+                async with exclusive_pass(project_id):
+                    result.results.append(await self._run_one(project_id))
+                    result.checked.append(project_id)
+            except PassAlreadyRunning:
+                result.skipped[str(project_id)] = "a pass is already running"
             except asyncio.CancelledError:
                 raise
             except Exception as exc:
@@ -184,8 +184,6 @@ class ProviderScheduler:
                     "continuity.scheduler_project_failed",
                     extra={"project_id": str(project_id), "error": type(exc).__name__},
                 )
-            finally:
-                self._in_flight.discard(project_id)
 
         if self._poll_factory is not None:
             await self._poll()

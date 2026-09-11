@@ -1663,3 +1663,78 @@ owner), C9-04 full frontend, C9-06 final gate.
 
 **Next intended task:** C9-04 or C9-06, the project owner's call. C9-03 stays
 deferred.
+
+---
+
+### 2026-09-12 — A surface to verify the product by hand, and the gap it exposed
+
+**Why:** the project owner asked for the smallest thing that would let them check
+the product works, explicitly *not* C9-04's full frontend — they are designing
+that separately.
+
+**The gap it exposed, which was the real finding.** `backend/providers/registry.py`'s
+default registry was **empty in production**. Every adapter in the repository was
+a test fixture or the evaluation harness's, so a real deployment looked up each
+provider a project depended on, found no adapter, recorded "unmonitored", and
+did nothing. The whole pipeline was reachable and nothing ever reached it.
+Confirmed by booting the API:
+
+```
+"continuity.providers_registered", "providers": [], "monitoring": false
+"continuity.scheduler_tick", "checked": 1, ... providers_checked: 0
+```
+
+Three pieces, kept small:
+
+1. **`backend/providers/openapi_source.py`** — `OpenApiSpecProvider`. Most
+   providers publish an OpenAPI specification at a stable URL and put their
+   version in `info.version`, which is enough to monitor one with no
+   provider-specific code. Configured, not coded: `PROVIDER_SPECS`. A local path
+   works too, which is how the loop is checked by hand — point at a file, edit
+   it, run a pass. It declares only `CURRENT_VERSION` and `OPENAPI_SPEC`,
+   because that is all a spec URL supports; an adapter declaring a changelog
+   would have to invent one.
+2. **`POST /projects/{id}/run`** — one pass now. The scheduler's hourly sweep is
+   right for unattended and useless for watching the product work.
+3. **`apps/web/components/RunNow.tsx`** — a plain panel. It exists to verify, not
+   to be the product's surface.
+
+**The one thing the panel does carefully:** it separates *nothing happened* from
+*nothing was checked*. Both produce "0 changes", and the second would tell an
+operator the product is broken when it is not. So it reports
+`providers_monitored` beside `providers_seen`, names each unmonitored provider
+and why, and lists what the deployment could not do above the result rather than
+below it.
+
+**Two reviewer findings, both mine, both real.**
+
+1. **The endpoint bypassed the scheduler's own guards.** It made the same
+   `run_pipeline` call with no in-flight lock and no state check, so two clicks —
+   or a click racing the hourly tick — would have run two pipelines over one
+   workspace and opened competing migration runs. That is precisely what
+   `scheduler.py`'s docstring promises cannot happen.
+2. **Then I documented the fix inaccurately**, claiming both gates lived in the
+   new shared module when the state gate still lived in the scheduler. Fixed by
+   *moving* `MONITORABLE` rather than softening the sentence — which also removed
+   an API module importing from a worker module.
+
+`backend/orchestration/in_flight.py` now holds both gates, and the scheduler and
+the API hold the same ones. A second pass is refused with 409 rather than queued:
+a queued pass would run against a repository state its caller never saw.
+
+**Stated rather than implied:** the in-flight guard is **process-wide, not
+deployment-wide**. Two API processes would each hold their own set. Making it
+real across processes needs a database lock, and that is worth doing before
+Continuity runs as more than one process.
+
+**Do not accidentally change:**
+- `exclusive_pass` checking membership and claiming under one lock. Two
+  coroutines that both saw an empty set would both proceed.
+- The release living in a `finally`. A pass that raised would otherwise leave a
+  project unable to run again for the life of the process.
+- `PROVIDER_SPECS` being read only from settings. The location is a deployment's
+  own choice, which is the whole reason it needs no SSRF guard — unlike
+  `backend/verification/environment.py`, whose URL comes from repository content.
+- The panel reporting `providers_seen` alongside `providers_monitored`.
+
+**Next intended task:** C9-04 or C9-06, the project owner's call.

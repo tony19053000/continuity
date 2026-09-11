@@ -316,3 +316,191 @@ async def _github_source(
         client, repository.owner, repository.name, repository.default_branch
     )
     return await source.load()
+
+
+# ---------------------------------------------------------------------------
+# Running a pass by hand
+# ---------------------------------------------------------------------------
+
+
+class RunStage(BaseModel):
+    """One stage of a pass, and whether it did anything."""
+
+    name: str
+    detail: str
+
+
+class RunNowResponse(BaseModel):
+    """What one pass of the whole product did, in the order it did it."""
+
+    project_id: uuid.UUID
+    #: Providers this project depends on. Not the same as the next field: a
+    #: provider with no adapter is looked at and not monitored, and reporting
+    #: only this one would say "1 provider checked" when nothing was checked.
+    providers_seen: int
+    providers_monitored: int
+    #: Why each unmonitored provider was skipped, in the monitor's own words.
+    unmonitored: list[str]
+    changes_recorded: int
+    relevant: int
+    runs: list[dict[str, Any]]
+    pull_requests: list[int]
+    stopped_at: str
+    stages: list[RunStage]
+    #: What this deployment could not do, and why. Empty is the interesting case.
+    limitations: list[str]
+
+
+@router.post("/projects/{project_id}/run", response_model=RunNowResponse)
+async def run_now(
+    project_id: uuid.UUID,
+    user: Annotated[User, Depends(current_user)],
+    session: Annotated[AsyncSession, Depends(get_db_session)],
+    settings: Annotated[Settings, Depends(get_settings_dep)],
+) -> RunNowResponse:
+    """Run one pipeline pass now, instead of waiting for the scheduler.
+
+    The scheduler sweeps on an interval — an hour by default — which is right
+    for running unattended and useless for watching the product work. This is
+    the same `run_pipeline` call the scheduler makes, with the same
+    collaborators, triggered by a person.
+
+    It reports what it *could not* do as plainly as what it did. A pass that
+    checked no providers because none are configured looks identical to a pass
+    that found nothing, and those are very different answers.
+    """
+    from backend.orchestration.in_flight import MONITORABLE, exclusive_pass
+    from backend.orchestration.pipeline import run_pipeline
+    from backend.orchestration.runtime import pipeline_collaborators
+    from backend.providers.registry import registry
+    from backend.workers.runner import project_workspace_manager
+
+    project = await session.get(Project, project_id)
+    if project is None or project.user_id != user.id:
+        raise NotFound("That project does not exist.")
+
+    repository = await session.get(Repository, project.repository_id)
+    if repository is None:  # pragma: no cover - foreign key
+        raise NotFound("That project has no repository.")
+
+    limitations: list[str] = []
+    if not registry.ids():
+        limitations.append(
+            "No provider adapter is registered, so no provider is being "
+            "monitored. Set PROVIDER_SPECS."
+        )
+
+    # A refusal, not a failure, and it keeps its own 503: a pass without a model
+    # cannot judge whether a change is relevant, and one that ran anyway would
+    # either guess or migrate for every release. The operator needs to add
+    # configuration, which is exactly what this status means.
+    collaborators = await pipeline_collaborators(settings)
+
+    workspaces = await project_workspace_manager(settings, project_id)
+    if workspaces is None:
+        limitations.append(
+            "This project has no local checkout, so a pass stops before "
+            "migrating. Re-import it with a local_path."
+        )
+
+    client = await _client_for(session, settings, repository)
+    if client is None:
+        limitations.append(
+            "No GitHub App client is available, so a pass stops before opening "
+            "a pull request."
+        )
+
+    if project.state not in MONITORABLE:
+        # The same gate the scheduler applies. A project mid-migration, waiting
+        # on an approval, or never scanned is not one a fresh pass should be
+        # started on — the run in flight owns the workspace and the state.
+        raise ValidationFailed(
+            f"This project is {project.state.value}, so a new pass cannot start. "
+            "A pass runs from monitoring; finish or resolve the run in flight "
+            "first."
+        )
+
+    try:
+        # Refused rather than queued if one is already running — by hand or by
+        # the scheduler. Two pipelines on one project fight over the same
+        # workspace and open competing migration runs.
+        async with exclusive_pass(project_id):
+            result = await run_pipeline(
+                session,
+                project,
+                workspaces=workspaces,
+                adapter_registry=registry,
+                github_client=client,
+                default_branch=repository.default_branch,
+                **collaborators,
+            )
+    finally:
+        if client is not None:
+            await client.aclose()
+
+    monitored = [item for item in result.monitored if item.skipped_reason is None]
+    return RunNowResponse(
+        project_id=project.id,
+        providers_seen=len(result.monitored),
+        providers_monitored=len(monitored),
+        unmonitored=[
+            f"{item.provider_id}: {item.skipped_reason}"
+            for item in result.monitored
+            if item.skipped_reason is not None
+        ],
+        changes_recorded=result.changes_recorded,
+        relevant=result.relevant,
+        runs=[run.summary() for run in result.runs],
+        pull_requests=result.pull_requests,
+        stopped_at=result.stopped_at,
+        stages=_stages(result),
+        limitations=limitations,
+    )
+
+
+def _stages(result: Any) -> list[RunStage]:
+    """The pass as a person would narrate it.
+
+    Derived from the result rather than emitted during the run, so this cannot
+    claim a stage happened that did not.
+    """
+    monitored = [item for item in result.monitored if item.skipped_reason is None]
+    stages = [
+        RunStage(
+            name="monitor",
+            detail=(
+                f"{len(monitored)} of {len(result.monitored)} provider(s) "
+                f"monitored, {result.changes_recorded} change(s) recorded"
+            ),
+        ),
+        RunStage(
+            name="assess",
+            detail=f"{result.relevant} change(s) affect this project",
+        ),
+    ]
+    for run in result.runs:
+        summary = run.summary()
+        stages.append(
+            RunStage(
+                name=f"run {summary['provider_id']}",
+                detail=f"{summary['final_state']} — {summary['reason']}",
+            )
+        )
+    if result.stopped_at:
+        stages.append(RunStage(name="stopped", detail=result.stopped_at))
+    return stages
+
+
+async def _client_for(
+    session: AsyncSession, settings: Settings, repository: Repository
+) -> Any | None:
+    """A GitHub client for this repository's installation, if there is one."""
+    from backend.models import GitHubInstallation
+    from backend.orchestration.runtime import github_client_for
+
+    if repository.installation_id is None:
+        return None
+    installation = await session.get(GitHubInstallation, repository.installation_id)
+    if installation is None:
+        return None
+    return github_client_for(settings, installation.installation_id)

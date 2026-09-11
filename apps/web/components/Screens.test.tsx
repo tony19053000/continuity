@@ -13,7 +13,7 @@
  * - approval buttons write backend state and re-read rather than assuming.
  */
 
-import { render, screen, waitFor } from "@testing-library/react";
+import { fireEvent, render, screen, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { afterEach, describe, expect, it, vi } from "vitest";
 
@@ -24,6 +24,7 @@ import { GraphView } from "@/components/GraphView";
 import { Integrations } from "@/components/Integrations";
 import { ProjectOverview } from "@/components/ProjectOverview";
 import { ProjectsList } from "@/components/ProjectsList";
+import { RunNow } from "@/components/RunNow";
 import { Runs } from "@/components/Runs";
 import { SecurityPage } from "@/components/SecurityPage";
 import * as api from "@/lib/api";
@@ -510,5 +511,64 @@ describe("ConnectRepository", () => {
 
     expect(await screen.findByText(/is not authorized/)).toBeInTheDocument();
     expect(scanned).not.toHaveBeenCalled();
+  });
+});
+
+describe("RunNow", () => {
+  it("distinguishes a pass that found nothing from one that checked nothing", async () => {
+    // The whole point of the panel. Both of these render "0 changes", and they
+    // mean completely different things to someone checking whether it works.
+    vi.spyOn(api, "runProjectNow").mockResolvedValue({
+      project_id: PROJECT_ID,
+      providers_seen: 1,
+      providers_monitored: 0,
+      unmonitored: ["acmepay: no adapter registered for this provider"],
+      changes_recorded: 0,
+      relevant: 0,
+      runs: [],
+      pull_requests: [],
+      stopped_at: "",
+      stages: [{ name: "monitor", detail: "0 of 1 provider(s) monitored" }],
+      limitations: ["No provider adapter is registered, so no provider is being monitored."],
+    });
+
+    render(<RunNow projectId={PROJECT_ID} />);
+    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+
+    expect(
+      await screen.findByText(/No provider adapter is registered/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText("acmepay: no adapter registered for this provider"),
+    ).toBeInTheDocument();
+    expect(screen.getByText("of 1")).toBeInTheDocument();
+  });
+
+  it("reports a pull request when the pass opened one", async () => {
+    vi.spyOn(api, "runProjectNow").mockResolvedValue({
+      project_id: PROJECT_ID,
+      providers_seen: 1,
+      providers_monitored: 1,
+      unmonitored: [],
+      changes_recorded: 1,
+      relevant: 1,
+      runs: [{ final_state: "merge_waiting" }],
+      pull_requests: [42],
+      stopped_at: "",
+      stages: [
+        { name: "monitor", detail: "1 of 1 provider(s) monitored, 1 change(s) recorded" },
+        { name: "assess", detail: "1 change(s) affect this project" },
+      ],
+      limitations: [],
+    });
+
+    render(<RunNow projectId={PROJECT_ID} />);
+    fireEvent.click(screen.getByRole("button", { name: "Run now" }));
+
+    expect(await screen.findByText(/Opened pull request/)).toBeInTheDocument();
+    expect(screen.getByText(/#42/)).toBeInTheDocument();
+    expect(
+      screen.queryByText(/could not do everything/),
+    ).not.toBeInTheDocument();
   });
 });

@@ -234,6 +234,13 @@ class Settings(BaseSettings):
     #: inside an isolated workspace and making outbound requests from
     #: Continuity's own host to a URL written in someone's repository are
     #: different risks. The second one is a deployment's decision.
+    #: Providers to monitor, as `{"provider_id": "spec URL or path"}`.
+    #: Empty by default — Continuity ships no provider-specific code, and
+    #: a deployment names the providers it cares about. Until one is
+    #: configured the adapter registry is empty and every provider a
+    #: project depends on is recorded as unmonitored, which is honest and
+    #: also means nothing ever happens.
+    PROVIDER_SPECS: dict[str, str] = Field(default_factory=dict)
     RELEASE_VERIFICATION_ENABLED: bool = False
     #: Whether a declared environment may resolve to a private, loopback, or
     #: link-local address. Off by default: without it, a manifest pointing at

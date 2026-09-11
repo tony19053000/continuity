@@ -1081,6 +1081,23 @@ and timestamp. A model can never write an approval record.
 
 ---
 
+Provider adapters are **configured, not coded**. Continuity ships one generic
+adapter, `backend/providers/openapi_source.py`: most providers publish an
+OpenAPI specification at a stable URL and put their version in `info.version`,
+which is enough to monitor one without provider-specific code. A deployment
+names the providers it cares about:
+
+```
+PROVIDER_SPECS={"acmepay": "https://acmepay.example/openapi.json"}
+```
+
+A local path works too, which is how the loop is checked by hand: point a
+provider at a file, edit the file, and run a pass. The setting is empty by
+default, and the startup log says so — with nothing configured, every provider a
+project depends on is recorded as *unmonitored* and no migration ever starts.
+That was silently the case until C9-05's follow-up: the registry was empty, so
+the whole pipeline was reachable and nothing ever reached it.
+
 ## 15. Background execution
 
 ```python
@@ -1092,6 +1109,32 @@ class JobQueue(Protocol):
 Job kinds: `provider_monitor`, `repository_scan`, `integration_map`,
 `change_analysis`, `impact_analysis`, `rehearsal`, `migration`, `validation`,
 `security_review`, `pr_create`, `pr_status_poll`, `post_merge_verify`.
+
+### Running a pass
+
+Two callers make the same `run_pipeline` call.
+
+`backend/workers/scheduler.py` sweeps every project on an interval — the
+autonomous half, and the one that matters in production. `POST
+/projects/{id}/run` runs one pass immediately, because an hourly sweep is right
+for running unattended and useless for watching the product work or for checking
+a deployment by hand.
+
+Because they are the same call, they share the same two gates. Both live in
+`backend/orchestration/in_flight.py` — neither on the scheduler, where they
+started, nor duplicated at the API, where they would have drifted:
+
+* a project whose state is not monitorable does not get a fresh pass — a run
+  waiting on an approval owns its workspace and its state;
+* a project with a pass in flight refuses a second one (409), rather than
+  queueing it. Two pipelines on one project fight over the same workspace and
+  open competing migration runs, and a queued pass would run against a
+  repository state its caller never saw.
+
+The guard is **process-wide, not deployment-wide**. Two API processes, or an API
+process and a separate worker, would each hold their own set. Making it real
+across processes needs a lock in the database, and that is worth doing before
+Continuity runs as more than one process.
 
 ### Merge detection
 

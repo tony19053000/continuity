@@ -12,8 +12,13 @@ monitoring without touching a module outside `backend/providers/`.
 
 from __future__ import annotations
 
+from typing import Any
+
+from backend.observability.logging import get_logger
 from backend.providers.base import ProviderAdapter, ProviderCapability
 from backend.shared.errors import ContinuityError
+
+logger = get_logger(__name__)
 
 
 class ProviderNotRegistered(ContinuityError):
@@ -91,3 +96,30 @@ class ProviderRegistry:
 
 #: Process-wide registry.
 registry = ProviderRegistry()
+
+
+def register_configured_providers(settings: Any) -> list[str]:
+    """Put every provider a deployment configured into the default registry.
+
+    Idempotent, so restarting or re-entering a lifespan does not raise on a
+    re-registration. Returns the ids registered, which is what the startup log
+    reports — an empty list there is the honest signal that nothing will be
+    monitored.
+    """
+    from backend.providers.openapi_source import configured_providers
+
+    registered: list[str] = []
+    for adapter in configured_providers(dict(settings.PROVIDER_SPECS or {})):
+        registry.register(adapter, replace=True)
+        registered.append(adapter.provider_id)
+
+    logger.info(
+        "continuity.providers_registered",
+        extra={
+            "providers": registered,
+            # Said out loud: with none configured, every project's providers are
+            # recorded as unmonitored and no migration can ever start.
+            "monitoring": bool(registered),
+        },
+    )
+    return registered

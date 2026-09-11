@@ -20,6 +20,7 @@ from backend.approvals import api as approvals_api
 from backend.github import webhooks as github_webhooks
 from backend.models.session import dispose_engine, init_engine
 from backend.observability.logging import configure_logging
+from backend.providers.registry import register_configured_providers
 from backend.shared.config import (
     Environment,
     GeminiConfig,
@@ -63,6 +64,10 @@ def create_app(settings: Settings | None = None) -> FastAPI:
         # Disabled when the model is unconfigured — a pass cannot judge
         # relevance without one — and when explicitly switched off, which is
         # how a test or a one-off API process opts out.
+        # Adapters first: a scheduler with an empty registry sweeps every
+        # project and finds every provider unmonitored.
+        register_configured_providers(resolved)
+
         scheduler = None
         if resolved.SCHEDULER_ENABLED and isinstance(resolved.gemini, GeminiConfig):
             await sweep_orphan_workspaces(resolved)

@@ -1415,3 +1415,192 @@ async def test_polling_detects_a_merge_and_closes_the_loop(
         # Detected, verified, and the baseline moved — without a webhook.
         assert run.state is RunState.VERIFIED
         assert await baseline_version(session, project, "acmepay") == "v2"
+
+
+# =========================================================================
+# 10. Running a pass by hand (the verification surface)
+# =========================================================================
+
+
+async def test_running_a_pass_by_hand_refuses_without_a_model(
+    client: AsyncClient, google: GoogleOAuthConfig, checkout: Path
+) -> None:
+    """A refusal with a reason, not a pass that found nothing.
+
+    Without a model a pass cannot judge relevance, and one that ran anyway would
+    either guess or migrate for every provider release. 503 is the right answer:
+    the operator has to add configuration.
+    """
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+
+    response = await client.post(f"/projects/{project_id}/run")
+
+    assert response.status_code == 503, response.text
+    assert response.json()["code"] == "integration_not_configured"
+
+
+async def test_running_a_pass_by_hand_reports_what_it_could_not_do(
+    client: AsyncClient,
+    google: GoogleOAuthConfig,
+    checkout: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The honest half of the button.
+
+    A pass that checked no providers because none are configured looks exactly
+    like a pass that found nothing. The endpoint must distinguish them: someone
+    pressing this button is trying to find out whether the product works, and
+    "nothing happened" would teach them the wrong thing.
+    """
+    _collaborators(monkeypatch)
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+
+    response = await client.post(f"/projects/{project_id}/run")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+    assert body["providers_seen"] == 1, "the project does depend on a provider"
+    assert body["providers_monitored"] == 0, "and nothing is monitoring it"
+    assert body["unmonitored"] == ["acmepay: no adapter registered for this provider"]
+    assert any(
+        "No provider adapter is registered" in item for item in body["limitations"]
+    )
+    assert [stage["name"] for stage in body["stages"]][:2] == ["monitor", "assess"]
+
+
+async def test_running_a_pass_by_hand_drives_the_real_pipeline(
+    client: AsyncClient,
+    google: GoogleOAuthConfig,
+    checkout: Path,
+    tmp_path: Path,
+    engineer: Any,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Same call the scheduler makes, triggered by a person.
+
+    The provider is registered the way a deployment registers one — in the
+    default registry — so this exercises the production lookup rather than the
+    test-only `adapter_registry` argument.
+    """
+    from backend.providers.registry import registry
+    from backend.workers import runner as runner_module
+
+    engineer(MIGRATED_CLIENT)
+    _collaborators(monkeypatch)
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+
+    registry.register(AcmePay(), replace=True)
+    monkeypatch.setattr(
+        runner_module,
+        "project_workspace_manager",
+        lambda _settings, _project_id: _ready(_workspaces(checkout, tmp_path)),
+    )
+    try:
+        response = await client.post(f"/projects/{project_id}/run")
+    finally:
+        registry.unregister("acmepay")
+
+    assert response.status_code == 200, response.text
+    body = response.json()
+
+    assert body["providers_monitored"] == 1
+    assert body["unmonitored"] == []
+    assert body["changes_recorded"] >= 1
+    assert body["relevant"] == 1
+    assert len(body["runs"]) == 1
+    # No GitHub client in this deployment, so the pass does every stage up to
+    # delivery and stops there — and says so rather than looking like a failure.
+    assert any("GitHub App" in item for item in body["limitations"])
+    assert [stage["name"] for stage in body["stages"]][:2] == ["monitor", "assess"]
+
+
+def _collaborators(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Give the endpoint the collaborators a configured deployment would have.
+
+    Only the model is substituted; the coordinator and the attempt budget are
+    the real ones, and everything the endpoint does with them is production
+    code.
+    """
+    from backend.orchestration import runtime as runtime_module
+    from tests.support.migration_fixtures import StubProvider
+
+    async def collaborators(_settings: Any) -> dict[str, Any]:
+        return {
+            "model_provider": StubProvider(),
+            "coordinator": RunCoordinator(max_repair_attempts=MAX_ATTEMPTS),
+            "max_attempts": MAX_ATTEMPTS,
+        }
+
+    monkeypatch.setattr(runtime_module, "pipeline_collaborators", collaborators)
+
+
+async def _ready(value: Any) -> Any:
+    return value
+
+
+async def test_two_passes_on_one_project_cannot_run_at_once(
+    client: AsyncClient,
+    google: GoogleOAuthConfig,
+    checkout: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard the scheduler always had, now shared with the button.
+
+    Two pipelines on one project fight over the same workspace and open
+    competing migration runs. The scheduler refused a second pass; this endpoint
+    makes the same call, so it has to refuse too — and refuse, not queue, since
+    a queued pass would run against a repository state its caller never saw.
+    """
+    import asyncio
+
+    from backend.orchestration import pipeline as pipeline_module
+
+    _collaborators(monkeypatch)
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+
+    entered = asyncio.Event()
+    release = asyncio.Event()
+    real = pipeline_module.run_pipeline
+
+    async def slow(*args: Any, **kwargs: Any) -> Any:
+        entered.set()
+        await release.wait()
+        return await real(*args, **kwargs)
+
+    monkeypatch.setattr(pipeline_module, "run_pipeline", slow)
+
+    first = asyncio.create_task(client.post(f"/projects/{project_id}/run"))
+    await asyncio.wait_for(entered.wait(), timeout=5)
+
+    second = await client.post(f"/projects/{project_id}/run")
+    release.set()
+
+    assert second.status_code == 409, second.text
+    assert second.json()["code"] == "pass_already_running"
+    assert (await first).status_code == 200
+
+
+async def test_a_project_mid_migration_does_not_start_another_pass(
+    client: AsyncClient,
+    google: GoogleOAuthConfig,
+    checkout: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The scheduler's state gate, applied to the button as well.
+
+    A run waiting on an approval owns its workspace and its state. Starting a
+    fresh pass alongside it would be a second claim on both.
+    """
+    _collaborators(monkeypatch)
+    _, project_id, _ = await _import_and_scan(client, google, checkout)
+
+    async with session_scope() as session:
+        project = await session.get(Project, project_id)
+        assert project is not None
+        project.state = RunState.APPROVAL_PENDING
+        await session.flush()
+
+    response = await client.post(f"/projects/{project_id}/run")
+
+    assert response.status_code == 422, response.text
+    assert "approval_pending" in response.json()["message"]

@@ -16,8 +16,9 @@ import pytest
 
 from backend.models import Project, Repository, RunState, User
 from backend.models.session import session_scope
+from backend.orchestration.in_flight import MONITORABLE
 from backend.orchestration.pipeline import PipelineResult
-from backend.workers.scheduler import MONITORABLE, ProviderScheduler
+from backend.workers.scheduler import ProviderScheduler
 
 pytestmark = pytest.mark.usefixtures("database")
 
