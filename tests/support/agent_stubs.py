@@ -112,7 +112,13 @@ def stub_agents(monkeypatch: pytest.MonkeyPatch, **overrides: Any) -> dict[str, 
 
         class Patched(original):  # type: ignore[misc, valid-type]
             def __init__(self, provider: Any, _runner: FixedRunner = runner, **kwargs: Any) -> None:
-                super().__init__(provider, runner=_runner, **kwargs)
+                # A test may stub twice — an autouse fixture plus a per-test
+                # override. The inner patch then receives the outer one's runner
+                # as a keyword, and *that* is the one the test meant: it was
+                # supplied explicitly, while `_runner` is only this layer's
+                # default. Preferring the default silently ignored the override.
+                supplied = kwargs.pop("runner", None)
+                super().__init__(provider, runner=supplied or _runner, **kwargs)
 
         monkeypatch.setattr(module, attribute, Patched)
 

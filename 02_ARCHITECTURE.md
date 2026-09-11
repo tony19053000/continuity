@@ -565,7 +565,16 @@ exactly, edge for edge — the list, not the prose, is the specification.
 | `CHANGE_ANALYSIS_COMPLETE` | `IMPACT_ANALYSIS_RUNNING` |
 | `IMPACT_ANALYSIS_RUNNING` | `CHANGE_IRRELEVANT`, `CHANGE_RELEVANT`, `RUN_FAILED` |
 | `CHANGE_IRRELEVANT` | `MONITORING_ACTIVE` |
-| `CHANGE_RELEVANT` | `REHEARSAL_PENDING` |
+
+`CHANGE_RELEVANT → MONITORING_ACTIVE` was added after an audit found a
+project could enter `CHANGE_RELEVANT` and never leave. The scheduler skips
+projects in that state — correctly, since a migration is under way — so a
+project that had one relevant change was never monitored again. It mirrors
+the `CHANGE_IRRELEVANT` edge, which always existed: both mean the pass is
+finished and the project is watching again. The runs it opened carry their
+own states independently.
+
+| `CHANGE_RELEVANT` | `REHEARSAL_PENDING`, `MONITORING_ACTIVE` |
 
 **Rehearsal**
 

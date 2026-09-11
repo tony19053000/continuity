@@ -24,6 +24,12 @@ export default function RootLayout({
             </Link>
             <nav aria-label="Main" className="flex gap-4 text-xs">
               <Link
+                href="/connect"
+                className="text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
+              >
+                Connect
+              </Link>
+              <Link
                 href="/projects"
                 className="text-neutral-600 hover:text-neutral-900 dark:text-neutral-400 dark:hover:text-neutral-100"
               >

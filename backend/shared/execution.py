@@ -97,6 +97,11 @@ ALLOWED_EXECUTABLES: Final[Mapping[str, Subcommands | None]] = {
         # local bookkeeping. Nothing here reaches the network, and `git worktree`
         # with no action is refused rather than treated as harmless.
         "worktree": frozenset({"add", "remove", "prune", "list"}),
+        # Re-applying a patch Continuity itself produced and stored, when a run
+        # is resumed after human approval. Writes only inside the confined cwd,
+        # reaches no network, and fails loudly rather than partially — which is
+        # exactly why it is the right tool for rebuilding a validated tree.
+        "apply": None,
     },
 }
 

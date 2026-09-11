@@ -224,10 +224,28 @@ async def settle(
     if run is None:  # pragma: no cover - foreign key makes this unreachable
         return "no_run"
 
-    # Merged goes to VERIFIED: there is no post-merge verification environment
-    # in this deployment, and claiming one would be the fake-green status the
-    # project forbids. Closed-unmerged returns the project to monitoring.
-    target = RunState.VERIFIED if merged else RunState.MONITORING_ACTIVE
+    if merged:
+        # A merge does not make a run VERIFIED on its own. Post-merge
+        # verification checks the merge is consistent with this run and only
+        # then advances the baseline — this used to jump straight to VERIFIED,
+        # which meant the baseline never moved and `VERIFIED` claimed more than
+        # had been checked.
+        from backend.workers.post_merge import verify_merge
+
+        result = await verify_merge(session, run)
+        await events.emit(
+            session,
+            kind=ActivityEventKind.MIGRATION_VERIFIED
+            if result.verified
+            else ActivityEventKind.PULL_REQUEST_CREATED,
+            actor="merge_detection",
+            summary=f"Pull request #{record.number} was merged. {result.reason}",
+            project_id=run.project_id,
+            migration_run_id=run.id,
+        )
+        return "merged" if result.verified else "merged_unverified"
+
+    target = RunState.MONITORING_ACTIVE
 
     if not can_transition(run.state, target):
         logger.info(
@@ -245,12 +263,9 @@ async def settle(
         from_state=run.state,
         to_state=target,
         evidence=TransitionEvidence(
-            reason=(
-                f"pull request #{record.number} was "
-                + ("merged" if merged else "closed without merging")
-            ),
+            reason=f"pull request #{record.number} was closed without merging",
             actor="merge_detection",
-            detail={"number": record.number, "merged": merged},
+            detail={"number": record.number, "merged": False},
         ),
         project_id=run.project_id,
         migration_run_id=run.id,
@@ -258,22 +273,17 @@ async def settle(
     run.state = target
     await session.flush()
 
-    await _return_project_to_monitoring(session, run, merged=merged)
+    await _return_project_to_monitoring(session, run, merged=False)
 
     await events.emit(
         session,
-        kind=ActivityEventKind.MIGRATION_VERIFIED
-        if merged
-        else ActivityEventKind.PULL_REQUEST_CREATED,
+        kind=ActivityEventKind.PULL_REQUEST_CREATED,
         actor="merge_detection",
-        summary=(
-            f"Pull request #{record.number} "
-            + ("was merged." if merged else "was closed without merging.")
-        ),
+        summary=f"Pull request #{record.number} was closed without merging.",
         project_id=run.project_id,
         migration_run_id=run.id,
     )
-    return "merged" if merged else "closed"
+    return "closed"
 
 
 async def _return_project_to_monitoring(

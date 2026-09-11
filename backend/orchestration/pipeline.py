@@ -39,7 +39,6 @@ from backend.agents.contracts import AnalyzedChange
 from backend.agents.impact_analyst import ImpactAssessment
 from backend.github.delivery import (
     DeliveredPullRequest,
-    DeliveryPreconditions,
     DeliveryRefused,
     deliver,
 )
@@ -55,10 +54,15 @@ from backend.models import (
     Repository,
     RunState,
 )
-from backend.models.enums import ApprovalStatus, PolicyDecision
+from backend.models.enums import ApprovalStatus
 from backend.models.schemas import ProviderChange, SourceRef, TransitionEvidence
 from backend.observability.logging import get_logger
 from backend.orchestration.coordinator import RunCoordinator
+from backend.orchestration.delivery_gate import (
+    PATCH_DIGEST_KEY,
+    files_digest,
+    preconditions_for,
+)
 from backend.orchestration.impact import assess_changes
 from backend.orchestration.repair import RepairResult, run_repair_loop
 from backend.orchestration.state_machine import can_transition, transition
@@ -143,8 +147,8 @@ async def run_pipeline(
     project: Project,
     *,
     model_provider: ModelProvider,
-    workspaces: WorkspaceManager,
     coordinator: RunCoordinator,
+    workspaces: WorkspaceManager | None = None,
     max_attempts: int,
     adapter_registry: ProviderRegistry | None = None,
     rehearsal_adapter: RehearsalAdapter | None = None,
@@ -183,6 +187,23 @@ async def run_pipeline(
         result.stopped_at = result.stopped_at or "no change affects this project"
         return result
 
+    if workspaces is None:
+        # A migration needs a real git worktree to run tests in, and that needs
+        # a local checkout of the repository. Continuity reads repositories
+        # through the GitHub App, which gives it contents but not a working
+        # tree — so a project with no `Repository.local_path` can be monitored,
+        # correlated, and assessed, and cannot be migrated. Saying so is the
+        # honest stop; opening a run that could never produce a patch is not.
+        result.stopped_at = (
+            f"{len(assessments)} change(s) need a migration, but this "
+            "repository has no local checkout configured to build one in"
+        )
+        logger.info(
+            "continuity.pipeline_no_workspace",
+            extra={"project_id": str(project.id), "runs_deferred": len(assessments)},
+        )
+        return result
+
     # --- 3. one run per change that warrants a migration -----------------
     for assessment in assessments:
         outcome = await _drive_run(
@@ -198,6 +219,12 @@ async def run_pipeline(
             default_branch=default_branch,
         )
         result.runs.append(outcome)
+
+    # The pass is over, whatever its runs did. Without this the project stays in
+    # CHANGE_RELEVANT, which the scheduler skips — so one relevant change would
+    # stop the project ever being monitored again. The runs it opened carry
+    # their own states and continue independently.
+    await _return_to_monitoring(session, project)
 
     result.stopped_at = "complete"
     logger.info(
@@ -360,9 +387,11 @@ async def _drive_run(
     assessment: ImpactAssessment,
     *,
     model_provider: ModelProvider,
-    workspaces: WorkspaceManager,
     coordinator: RunCoordinator,
     max_attempts: int,
+    # Not optional here: `run_pipeline` refuses before reaching this point when
+    # there is no checkout to migrate in.
+    workspaces: WorkspaceManager,
     rehearsal_adapter: RehearsalAdapter | None,
     github_client: Any | None,
     default_branch: str,
@@ -436,10 +465,12 @@ async def _drive_run(
         outcome.reason = outcome.repair.reason
 
         if outcome.repair.final_state is not RunState.SECURITY_REVIEW_PASSED:
-            # Every other ending needs a person: the budget ran out, a finding
-            # is blocking, or an approval is pending. The patch stays in the
-            # workspace, which is discarded on the way out of this block — a
-            # rejected migration leaves nothing behind.
+            # Every other ending needs a person. The workspace is discarded on
+            # the way out of this block, so anything needed to resume is
+            # recorded now — the stored diff and the identity of the tree it
+            # produces. `resume.py` rebuilds the workspace from those.
+            if outcome.repair.final_state is RunState.APPROVAL_PENDING:
+                await _record_patch_identity(session, run, workspace)
             outcome.approval_ids = await _pending_approvals(session, run)
             return outcome
 
@@ -495,19 +526,17 @@ async def _deliver_if_possible(
     report = await build_report(session, run)
 
     try:
+        # Derived from this run's own stored rows, never from what the caller
+        # believes happened. Raises if the evidence is incomplete, so there is
+        # no return value a caller can forget to check.
+        preconditions = await preconditions_for(session, run, files=files)
+
         outcome.delivered = await deliver(
             session,
             run,
             repository,
             client=github_client,
-            preconditions=DeliveryPreconditions(
-                # Both re-derived from this run's own outcome rather than
-                # carried forward as booleans: delivery re-checks, it does not
-                # trust.
-                validation_passed=True,
-                security_decision=PolicyDecision.ALLOW,
-                required_approval_ids=await _granted_approvals(session, run),
-            ),
+            preconditions=preconditions,
             default_branch=default_branch,
             files=files,
             title=(
@@ -526,6 +555,44 @@ async def _deliver_if_possible(
     refreshed = await session.get(MigrationRun, run.id)
     outcome.final_state = refreshed.state if refreshed else RunState.MERGE_WAITING
     outcome.reason = f"pull request #{outcome.delivered.number} opened"
+
+
+async def _return_to_monitoring(session: AsyncSession, project: Project) -> None:
+    tracked = await session.get(Project, project.id) or project
+    if not can_transition(tracked.state, RunState.MONITORING_ACTIVE):
+        return
+    await transition(
+        session,
+        from_state=tracked.state,
+        to_state=RunState.MONITORING_ACTIVE,
+        evidence=TransitionEvidence(
+            reason="pipeline pass complete; monitoring resumed",
+            actor="pipeline",
+            detail={},
+        ),
+        project_id=tracked.id,
+    )
+    tracked.state = RunState.MONITORING_ACTIVE
+    await session.flush()
+
+
+async def _record_patch_identity(
+    session: AsyncSession, run: MigrationRun, workspace: Any
+) -> None:
+    """Record what the validated tree looks like, before the workspace goes.
+
+    A resumed run rebuilds the patch from the stored diff. This is what lets
+    delivery prove the rebuilt tree is the one that was reviewed rather than
+    trusting that re-applying a diff is deterministic.
+    """
+    changed = await workspace.changed_files()
+    files = {path: workspace.read_file(path) for path in changed}
+
+    tracked = await session.get(MigrationRun, run.id) or run
+    stored = dict(tracked.evidence_report or {})
+    stored[PATCH_DIGEST_KEY] = files_digest(files)
+    tracked.evidence_report = stored
+    await session.flush()
 
 
 async def _pending_approvals(

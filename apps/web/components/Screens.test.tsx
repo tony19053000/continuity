@@ -19,6 +19,7 @@ import { afterEach, describe, expect, it, vi } from "vitest";
 
 import { Approvals } from "@/components/Approvals";
 import { Changes } from "@/components/Changes";
+import { ConnectRepository } from "@/components/ConnectRepository";
 import { GraphView } from "@/components/GraphView";
 import { Integrations } from "@/components/Integrations";
 import { ProjectOverview } from "@/components/ProjectOverview";
@@ -366,5 +367,121 @@ describe("Approvals", () => {
     expect(
       await screen.findByText(/Nothing needs your approval/),
     ).toBeInTheDocument();
+  });
+});
+
+describe("ConnectRepository", () => {
+  const repository = (): api.AuthorizedRepository => ({
+    full_name: "acme/commerce-api",
+    default_branch: "main",
+    installation_id: 4900912,
+  });
+
+  it("lists only what the GitHub App authorizes", async () => {
+    vi.spyOn(api, "listAuthorizedRepositories").mockResolvedValue([repository()]);
+
+    render(<ConnectRepository />);
+
+    expect(await screen.findByText("acme/commerce-api")).toBeInTheDocument();
+    expect(
+      screen.getByText(/does not grant access to any repository/),
+    ).toBeInTheDocument();
+  });
+
+  it("says so when nothing is authorized", async () => {
+    vi.spyOn(api, "listAuthorizedRepositories").mockResolvedValue([]);
+
+    render(<ConnectRepository />);
+
+    expect(
+      await screen.findByText(/No repositories are authorized yet/),
+    ).toBeInTheDocument();
+  });
+
+  it("imports, scans, and reports what the scan actually found", async () => {
+    vi.spyOn(api, "listAuthorizedRepositories").mockResolvedValue([repository()]);
+    const imported = vi.spyOn(api, "importRepository").mockResolvedValue({
+      project_id: "p1",
+      name: "commerce-api",
+      repository: "acme/commerce-api",
+      can_migrate: true,
+      note: "Scan this project to map its integrations and start monitoring.",
+      state: "project_created",
+    });
+    const scanned = vi.spyOn(api, "scanProject").mockResolvedValue({
+      project_id: "p1",
+      state: "monitoring_active",
+      monitorable: true,
+      files_indexed: 12,
+      graph_version: 1,
+      confirmed_nodes: 9,
+      inferred_workflows: 2,
+      providers: 1,
+      mapping_degraded: null,
+    });
+
+    render(<ConnectRepository />);
+    await userEvent.click(await screen.findByRole("radio"));
+    await userEvent.click(screen.getByRole("button", { name: "Import and scan" }));
+
+    await waitFor(() => expect(scanned).toHaveBeenCalledWith("p1"));
+    expect(imported).toHaveBeenCalledWith("acme/commerce-api", "");
+    expect(await screen.findByText("Scan complete")).toBeInTheDocument();
+    expect(screen.getByText("12")).toBeInTheDocument();
+    expect(screen.getByText("Monitoring")).toBeInTheDocument();
+  });
+
+  it("warns when a project cannot be migrated", async () => {
+    // Honest rather than convenient: without a checkout there is nowhere to run
+    // the tests a migration has to pass, so no pull request will ever arrive.
+    vi.spyOn(api, "listAuthorizedRepositories").mockResolvedValue([repository()]);
+    vi.spyOn(api, "importRepository").mockResolvedValue({
+      project_id: "p1",
+      name: "commerce-api",
+      repository: "acme/commerce-api",
+      can_migrate: false,
+      note: "Migrations need a local checkout.",
+      state: "project_created",
+    });
+    vi.spyOn(api, "scanProject").mockResolvedValue({
+      project_id: "p1",
+      state: "monitoring_active",
+      monitorable: true,
+      files_indexed: 12,
+      graph_version: 1,
+      confirmed_nodes: 9,
+      inferred_workflows: 0,
+      providers: 1,
+      mapping_degraded: "no model provider is configured",
+    });
+
+    render(<ConnectRepository />);
+    await userEvent.click(await screen.findByRole("radio"));
+    await userEvent.click(screen.getByRole("button", { name: "Import and scan" }));
+
+    expect(
+      await screen.findByText(/will not open pull requests/),
+    ).toBeInTheDocument();
+    expect(
+      screen.getByText(/Workflow inference was skipped/),
+    ).toBeInTheDocument();
+  });
+
+  it("surfaces an import failure instead of proceeding to scan", async () => {
+    vi.spyOn(api, "listAuthorizedRepositories").mockResolvedValue([repository()]);
+    vi.spyOn(api, "importRepository").mockRejectedValue(
+      new api.ApiError(404, {
+        code: "not_found",
+        message: "acme/commerce-api is not authorized for any of your installations.",
+      }),
+    );
+    const scanned = vi.spyOn(api, "scanProject");
+
+    render(<ConnectRepository />);
+    await userEvent.click(await screen.findByRole("radio"));
+    await userEvent.click(screen.getByRole("button", { name: "Import and scan" }));
+
+    expect(await screen.findByText(/is not authorized/)).toBeInTheDocument();
+    expect(scanned).not.toHaveBeenCalled();
   });
 });

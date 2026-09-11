@@ -63,7 +63,12 @@ _EXPLICIT: Final[dict[RunState, frozenset[RunState]]] = {
         {S.CHANGE_IRRELEVANT, S.CHANGE_RELEVANT, S.RUN_FAILED}
     ),
     S.CHANGE_IRRELEVANT: frozenset({S.MONITORING_ACTIVE}),
-    S.CHANGE_RELEVANT: frozenset({S.REHEARSAL_PENDING}),
+    # MONITORING_ACTIVE is how a project gets back to watching once its
+    # relevant changes have been dealt with. Without it a project that
+    # ever had a relevant change was stuck forever: the scheduler skips
+    # CHANGE_RELEVANT, so it would never be monitored again. Mirrors the
+    # CHANGE_IRRELEVANT edge, which always existed.
+    S.CHANGE_RELEVANT: frozenset({S.MONITORING_ACTIVE, S.REHEARSAL_PENDING}),
     # --- Rehearsal ---
     S.REHEARSAL_PENDING: frozenset({S.REHEARSAL_RUNNING, S.REHEARSAL_UNAVAILABLE}),
     S.REHEARSAL_RUNNING: frozenset(

@@ -7,22 +7,32 @@ message disagrees with it, this file is right and the other is stale.
 
 ## Overall completion
 
-**93%**
+Two numbers, because one of them hid a real gap before and must not again.
 
-Phases 0–8 complete, plus the end-to-end wiring that turns them into a product. Continuity now reviews its own patch and asks a human when
-it must. Thirteen finding categories are detected — most by code rather than by
-a model — and the policy engine, not the reviewer, decides; a run whose tests
-pass still stops at `SECURITY_REVIEW_PASSED` or `APPROVAL_PENDING` depending on
-what the review found. Approving is something only an authenticated person can
-do, re-checked at the instant it is relied on rather than trusted from earlier
-in the run.
+| Measure | Value | What it means |
+| --- | --- | --- |
+| **Tickets delivered** | **87%** | C0-01 … C8-06 are done and reviewer-passed. Phase 9's six tickets are not. |
+| **End-to-end readiness** | **works, unattended** | A real repository can be imported through the UI and reach a pull request with no database seeding and no human in the loop except where policy demands one. |
 
-**Continuity now runs end to end.** `backend/orchestration/pipeline.py` connects
-monitor → correlate → assess → rehearse → migrate → repair → security review →
-approval gate → deliver, so a provider shipping v2 and a pull request waiting for
-review are the two ends of one call. `backend/workers/scheduler.py` runs it on an
-interval. The UI at `/projects` and `/approvals` observes and controls it, every
-figure read from a stored record. Test suite has **zero skips**.
+Phases 0–8 are complete, and the loop between them is now closed. Continuity
+reviews its own patch and asks a human when it must. Thirteen finding categories
+are detected — most by code rather than by a model — and the policy engine, not
+the reviewer, decides; a run whose tests pass still stops at
+`SECURITY_REVIEW_PASSED` or `APPROVAL_PENDING` depending on what the review
+found. Approving is something only an authenticated person can do, re-checked at
+the instant it is relied on rather than trusted from earlier in the run.
+
+**The whole product runs as one loop.** Connect → import → scan → map → baseline
+→ monitor → correlate → assess → rehearse → migrate → repair → security review →
+approval gate → deliver → merge → post-merge verification → baseline advance.
+`backend/orchestration/onboarding.py` builds the graph a new project needs;
+`backend/orchestration/pipeline.py` runs a pass over it;
+`backend/orchestration/resume.py` picks a paused run back up after a person
+answers; `backend/workers/post_merge.py` closes the loop after a merge and only
+then moves the baseline forward. `backend/workers/scheduler.py` drives all of it
+on an interval, started by the application itself. The UI at `/connect`,
+`/projects`, and `/approvals` observes and controls it, every figure read from a
+stored record. Test suite has **zero skips**.
 
 | Field | Value |
 | --- | --- |
@@ -178,10 +188,14 @@ project's failure does not stop the sweep, a failing tick does not kill the
 loop, and shutdown waits for the pass in flight rather than orphaning a worktree
 and its child processes. 18 tests.
 
-Nothing starts it automatically yet — a deployment wires `start()` into its own
-lifecycle, because how and where it runs is a deployment decision. Development
-runs it in-process; production may replace it with SQS, Step Functions, or
-AgentCore Runtime without changing `run_pipeline`.
+**The application now starts it.** `backend/api/app.py`'s lifespan builds the
+scheduler through `backend/workers/runner.py` and calls `start()` on startup and
+`stop()` on shutdown, gated on `SCHEDULER_ENABLED` and on a real Gemini
+configuration — so a deployment with no model credentials serves the API without
+pretending to monitor anything. `test_the_application_starts_the_scheduler`
+asserts this through the real ASGI lifespan rather than by calling `start()`
+itself. Production may still replace the in-process loop with SQS, Step
+Functions, or AgentCore Runtime without changing `run_pipeline`.
 
 ---
 
@@ -189,15 +203,16 @@ AgentCore Runtime without changing `run_pipeline`.
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **1130 passing, 0 skipped** |
-| Security | `uv run pytest tests/security` | **322 passing** |
-| Frontend unit | `npm run test` | **41 passing** |
+| Python unit + integration | `uv run pytest` | **1150 passing, 0 skipped** |
+| Security | `uv run pytest tests/security` | **324 passing** |
+| Frontend unit | `npm run test` | **46 passing** |
+| Product loop (HTTP API in, pull request out) | `uv run pytest tests/integration/test_product_loop.py` | **18 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
-| Typecheck (py) | `uv run mypy backend` | **Passing** (89 source files) |
+| Typecheck (py) | `uv run mypy backend` | **Passing** (96 source files) |
 | Lint (web) | `npm run lint` | **Passing** |
 | Typecheck (web) | `npm run typecheck` | **Passing** |
-| Build (web) | `npm run build` | **Passing** — `/`, `/signin`, `/projects`, `/projects/[id]`, `/approvals` |
+| Build (web) | `npm run build` | **Passing** — `/`, `/signin`, `/connect`, `/projects`, `/projects/[id]`, `/approvals` |
 | Migrations | `uv run alembic check` | **In sync** with the models |
 | Live integrations | `uv run pytest tests/integration/test_external_integrations.py` | **9 passing** — AWS, GitHub App, Google OAuth |
 | Live Strands + Gemini | `uv run pytest tests/integration/test_strands_roundtrip.py` | **3 passing** — real tool call proven |
@@ -1270,3 +1285,102 @@ scanned, and reporting `TEE attestation: Not Configured`.
 **Next intended task:** the project owner's call. The remaining Phase 9 tickets
 are C9-01, C9-02, C9-03, C9-05, C9-06, plus the sign-in and import screens that
 would let a project be created without seeding.
+
+---
+
+### 2026-09-11 — The product loop: closing the gaps a direction audit found
+
+**Why this happened:** an audit compared the code against the product story
+step by step and found Continuity was assembled as components rather than as a
+loop. 1130 tests passed while six modules had **zero production callers** and no
+real repository could have started a run. This entry records the repair.
+
+**What was broken, and what now closes it:**
+
+1. **The front half was never wired.** `run_repository_scan`, `map_integrations`,
+   and `establish_baseline` existed and were only ever called by tests, so a
+   project reached monitoring by database seeding or not at all.
+   `backend/orchestration/onboarding.py` now walks a project from
+   `GITHUB_CONNECTED` to a real graph and a real baseline, and
+   `backend/api/routers/onboarding.py` exposes it as
+   `GET /repositories`, `POST /repositories/import`, `POST /projects/{id}/scan`.
+   Repository authorization is checked against the App's live installation
+   listing, not against what the request claims.
+
+2. **Approval was a dead end.** The pipeline set `APPROVAL_PENDING` without
+   creating an `Approval` row, and the validated patch died with the workspace.
+   `repair.py` now creates a real approval request through
+   `backend/approvals/service.py`, the patch and its digest are persisted before
+   the run pauses, and `backend/orchestration/resume.py` resumes the *same*
+   logical run: re-applies the stored diff, re-walks final validation, and
+   delivers. Rejection ends the run at `REJECTED` and returns the project to
+   monitoring without touching GitHub. No agent can write approval state — only
+   `POST /approvals/{id}` behind a session can.
+
+3. **Delivery's security gate was fed literals.** `validation_passed=True` and
+   `security_decision=ALLOW` were hardcoded at the call site, which meant the
+   gate could never refuse. `backend/orchestration/delivery_gate.py` now derives
+   every precondition from persisted evidence — the last `MigrationAttempt`
+   outcome, the recorded security review, the strictest `SecurityFinding`
+   decision, the `Approval` rows — and **refuses when evidence is missing**, so
+   "reviewed and clean" is distinguishable from "nobody looked". It also compares
+   a digest of the files about to be delivered against the files that were
+   reviewed, and refuses if they differ.
+
+4. **`check_preconditions` treated ASK as a hard refusal**, which made approval
+   pointless: a run that asked, and was answered yes, still could not deliver.
+   ASK now refuses only when no approval was requested; each approval is still
+   re-read at the instant it is relied upon. **DENY remains absolute** and no
+   approval can lift it.
+
+5. **Nothing started the scheduler.** See B-06 — the application's lifespan does
+   now, and a test asserts it through the real ASGI lifecycle.
+
+6. **The loop never closed after a merge.** `backend/workers/post_merge.py`
+   verifies that a merged pull request is genuinely this run's — Continuity's own
+   branch, matching the run's target branch, with a recorded target version — and
+   the baseline advances **only** after `POST_MERGE_VERIFICATION_PASSED`. An
+   inconsistent merge goes to `HUMAN_REVIEW_REQUIRED` and the baseline stays
+   where it was. `poll_open_pull_requests` had no caller at all; with webhooks
+   disabled, nothing ever noticed a merge. The scheduler's follow-up pass now
+   resumes approvals, polls for merges, and verifies them.
+
+**Honest scope of post-merge verification:** it checks merge consistency. It does
+not contact a deployed application. It is not the Release Guardian of C9-02, and
+is not described as one.
+
+**Evidence:** `tests/integration/test_product_loop.py` — 18 tests that enter
+through the HTTP API and seed nothing a real user could not produce, with GitHub
+stubbed only at the external boundary. One of them,
+`test_a_new_repository_reaches_monitoring_without_any_seeding`, is the direct
+answer to the audit's sharpest finding. `tests/support/product_repo.py` builds a
+real git repository with a real provider client so the extractor has genuine code
+to read.
+
+**Two changes worth flagging deliberately:**
+- `git apply` was added to the executable allowlist so a resumed run can rebuild
+  its own patch. The argv is fixed and not model-controlled, and it runs inside
+  the confined workspace.
+- `CHANGE_RELEVANT → MONITORING_ACTIVE` was added to the state machine and
+  documented in `02_ARCHITECTURE.md` §8. Without it a project that saw a relevant
+  change but stopped short of migrating was stuck forever and the scheduler
+  skipped it. The bidirectional parity guard caught the undocumented edge, which
+  is what it is for.
+
+**What is NOT built:** C9-01 Red-Team, C9-02 Release Guardian, C9-03 confidential
+execution, C9-05 evaluation harness, C9-06 final gate, Playwright E2E. The
+frontend is the minimum needed to operate the loop, not the full 18 screens of
+`04_FRONTEND_SPEC.md`.
+
+**Do not accidentally change:**
+- `delivery_gate.preconditions_for` **raising** `DeliveryRefused` rather than
+  returning a failing set. A caller that could ignore the return value would
+  silently deliver unreviewed code.
+- The patch digest being recorded *before* the run pauses. Recorded after, it
+  would attest to whatever the resume happened to produce.
+- `advance_baseline` living only behind `POST_MERGE_VERIFICATION_PASSED`.
+- The scheduler's start being gated on a real `GeminiConfig` — a scheduler with
+  no model would sweep projects and fail every tick.
+
+**Next intended task:** the project owner's call. Phase 9 proper — C9-01, C9-02,
+C9-03, C9-05, C9-06.

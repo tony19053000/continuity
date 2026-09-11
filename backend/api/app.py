@@ -15,18 +15,20 @@ from starlette.middleware.sessions import SessionMiddleware
 
 from backend.api.auth import router as auth_router
 from backend.api.auth.session import OAUTH_STATE_MAX_AGE
-from backend.api.routers import health, projects
+from backend.api.routers import health, onboarding, projects
 from backend.approvals import api as approvals_api
 from backend.github import webhooks as github_webhooks
 from backend.models.session import dispose_engine, init_engine
 from backend.observability.logging import configure_logging
 from backend.shared.config import (
     Environment,
+    GeminiConfig,
     GoogleOAuthConfig,
     Settings,
     get_settings,
 )
 from backend.shared.errors import ContinuityError
+from backend.workers.runner import build_scheduler, sweep_orphan_workspaces
 
 logger = logging.getLogger(__name__)
 
@@ -52,9 +54,41 @@ def create_app(settings: Settings | None = None) -> FastAPI:
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         init_engine(resolved)
         logger.info("continuity.startup", extra={"settings": repr(resolved)})
+
+        # Monitoring is the product's autonomous half, and until this existed
+        # nothing ran it: `ProviderScheduler` was built, tested, and never
+        # started. It runs in-process here; production may replace it with SQS,
+        # Step Functions, or AgentCore Runtime without changing `run_pipeline`.
+        #
+        # Disabled when the model is unconfigured — a pass cannot judge
+        # relevance without one — and when explicitly switched off, which is
+        # how a test or a one-off API process opts out.
+        scheduler = None
+        if resolved.SCHEDULER_ENABLED and isinstance(resolved.gemini, GeminiConfig):
+            await sweep_orphan_workspaces(resolved)
+            scheduler = build_scheduler(resolved)
+            await scheduler.start()
+            app.state.scheduler = scheduler
+        else:
+            logger.info(
+                "continuity.scheduler_not_started",
+                extra={
+                    "enabled": resolved.SCHEDULER_ENABLED,
+                    "reason": (
+                        "disabled by configuration"
+                        if not resolved.SCHEDULER_ENABLED
+                        else "no model provider is configured"
+                    ),
+                },
+            )
+
         try:
             yield
         finally:
+            if scheduler is not None:
+                # Awaited, not just cancelled: a pass in flight holds a git
+                # worktree and may have child processes.
+                await scheduler.stop()
             await dispose_engine()
             logger.info("continuity.shutdown")
 
@@ -124,6 +158,7 @@ def create_app(settings: Settings | None = None) -> FastAPI:
 
     app.include_router(health.router)
     app.include_router(projects.router)
+    app.include_router(onboarding.router)
     app.include_router(auth_router.router)
     app.include_router(approvals_api.router)
     app.include_router(github_webhooks.router)

@@ -304,3 +304,58 @@ export const decideApproval = (
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ decision }),
   });
+
+// --- Onboarding ---------------------------------------------------------
+
+export interface AuthorizedRepository {
+  full_name: string;
+  default_branch: string;
+  installation_id: number;
+}
+
+export interface ProjectCreated {
+  project_id: string;
+  name: string;
+  repository: string;
+  /**
+   * Whether migrations are possible. Continuity reads a repository through the
+   * GitHub App, which supplies contents but not a working tree — so without a
+   * local checkout it monitors and assesses but never opens a pull request.
+   * The UI says so rather than letting a user discover it later.
+   */
+  can_migrate: boolean;
+  note: string;
+  state: RunState;
+}
+
+export interface ScanResult {
+  project_id: string;
+  state: RunState;
+  monitorable: boolean;
+  files_indexed: number;
+  graph_version: number | null;
+  confirmed_nodes: number;
+  inferred_workflows: number;
+  providers: number;
+  /** Set when workflow inference was skipped; the graph is confirmed-only. */
+  mapping_degraded: string | null;
+}
+
+export const listAuthorizedRepositories = (): Promise<AuthorizedRepository[]> =>
+  request<AuthorizedRepository[]>("/repositories");
+
+export const importRepository = (
+  fullName: string,
+  localPath?: string,
+): Promise<ProjectCreated> =>
+  request<ProjectCreated>("/repositories/import", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({
+      full_name: fullName,
+      local_path: localPath || null,
+    }),
+  });
+
+export const scanProject = (projectId: string): Promise<ScanResult> =>
+  request<ScanResult>(`/projects/${projectId}/scan`, { method: "POST" });

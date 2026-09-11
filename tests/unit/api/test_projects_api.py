@@ -535,14 +535,28 @@ async def test_no_endpoint_returns_a_secret(
         assert GITHUB_TOKEN not in (await client.get(path)).text, path
 
 
+#: The one API module allowed to reach a model, named rather than inferred.
+#: Onboarding triggers the Integration Mapper, which infers workflows — that is
+#: agent work a user asked for, not a screen quietly asking a model what to say.
+#: Every other module under `backend/api` renders stored records.
+MODEL_USING_API_MODULES = {"onboarding.py"}
+
+
 def test_the_read_api_cannot_reach_a_model() -> None:
-    """A screen shows what happened, never what a model thinks happened."""
+    """A screen shows what happened, never what a model thinks happened.
+
+    Scoped to the read surface. A write endpoint that starts a scan is a
+    different thing from a read endpoint that renders one, and conflating them
+    would either forbid onboarding or let a projection quietly consult a model.
+    """
     import ast
 
     root = Path(__file__).resolve().parents[3] / "backend" / "api"
     offenders = []
 
     for path in root.rglob("*.py"):
+        if path.name in MODEL_USING_API_MODULES:
+            continue
         imports = {
             node.module
             for node in ast.walk(ast.parse(path.read_text()))
@@ -555,3 +569,27 @@ def test_the_read_api_cannot_reach_a_model() -> None:
             offenders.append(path.name)
 
     assert not offenders, f"API modules reaching a model: {offenders}"
+
+
+def test_the_model_using_exception_is_real() -> None:
+    """Guards the exception list against outliving its reason.
+
+    An entry that no longer reaches a model is an exemption nobody needs, and a
+    quiet place for a future one to hide.
+    """
+    import ast
+
+    root = Path(__file__).resolve().parents[3] / "backend" / "api"
+
+    for name in MODEL_USING_API_MODULES:
+        matches = list(root.rglob(name))
+        assert matches, f"{name} is exempted and does not exist"
+        imports = {
+            node.module
+            for node in ast.walk(ast.parse(matches[0].read_text()))
+            if isinstance(node, ast.ImportFrom) and node.module
+        }
+        assert any(
+            module.startswith(("backend.agents", "backend.shared.model_provider"))
+            for module in imports
+        ), f"{name} is exempted but reaches no model"

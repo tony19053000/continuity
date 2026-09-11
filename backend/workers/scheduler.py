@@ -77,14 +77,16 @@ class ProviderScheduler:
     `pipeline_factory` supplies the collaborators a pass needs — a model
     provider, a workspace manager, a GitHub client. It is a factory rather than
     a set of stored objects so that a long-lived scheduler does not hold a
-    GitHub installation token across its expiry.
+    GitHub installation token across its expiry, and it takes the project id
+    because two of those three differ per project: the workspace depends on
+    that repository's checkout, and the GitHub client on its installation.
     """
 
     def __init__(
         self,
         *,
         interval_seconds: int,
-        pipeline_factory: Callable[[], Awaitable[dict[str, Any]]],
+        pipeline_factory: Callable[[uuid.UUID], Awaitable[dict[str, Any]]],
         poll_factory: Callable[[], Awaitable[Any]] | None = None,
     ) -> None:
         if interval_seconds < 1:
@@ -193,7 +195,7 @@ class ProviderScheduler:
         return result
 
     async def _run_one(self, project_id: uuid.UUID) -> PipelineResult:
-        collaborators = await self._pipeline_factory()
+        collaborators = await self._pipeline_factory(project_id)
         async with session_scope() as session:
             project = await session.get(Project, project_id)
             if project is None:  # pragma: no cover - deleted mid-sweep

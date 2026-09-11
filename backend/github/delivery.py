@@ -132,11 +132,21 @@ async def check_preconditions(
             "for a patch whose tests it has not seen succeed."
         )
 
-    if preconditions.security_decision is not PolicyDecision.ALLOW:
+    if preconditions.security_decision is PolicyDecision.DENY:
+        # DENY is never negotiable. No approval clears it, because the actions
+        # policy classifies DENY are the ones nobody is allowed to authorise.
         raise DeliveryRefused(
-            f"the security review returned {preconditions.security_decision.value}; "
-            "delivery requires allow."
+            "the security review returned deny; delivery is refused."
         )
+
+    if preconditions.security_decision is PolicyDecision.ASK:
+        # ASK means *ask*, not refuse. An unanswered question blocks delivery;
+        # an answered one is the whole point of the approval flow, and each
+        # approval is re-read below at the moment it is relied on.
+        if not preconditions.required_approval_ids:
+            raise DeliveryRefused(
+                "the security review returned ask and no approval was requested."
+            )
 
     for approval_id in preconditions.required_approval_ids:
         try:

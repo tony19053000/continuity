@@ -32,6 +32,7 @@ from backend.agents.contracts import AnalyzedChange, ImpactAnalystOutput
 from backend.agents.migration_engineer import MigrationPatch, produce_patch
 from backend.agents.security_reviewer import SecurityReview, review_patch
 from backend.agents.validator import Validation, validate
+from backend.approvals.service import ApprovalRequest, create_request
 from backend.migrations.workspace import MigrationWorkspace
 from backend.models import MigrationAttempt, MigrationRun, SecurityFinding
 from backend.models.enums import (
@@ -39,10 +40,16 @@ from backend.models.enums import (
     AttemptOutcome,
     PolicyDecision,
     RunState,
+    Severity,
 )
 from backend.observability import events
 from backend.observability.logging import get_logger
 from backend.orchestration.coordinator import RunCoordinator
+from backend.orchestration.delivery_gate import (
+    PATCH_DIFF_DIGEST_KEY,
+    SECURITY_REVIEW_KEY,
+    patch_digest,
+)
 from backend.shared.model_provider import ModelProvider
 from backend.validation.discovery import TestCommandNotFound
 from backend.validation.results import UnparseableTestOutput
@@ -521,6 +528,13 @@ async def _review(
                 policy_decision=finding.policy_decision,
             )
         )
+
+    # Record that the review *happened*, and the identity of exactly what it
+    # reviewed. Without the first, an empty finding list is ambiguous — clean or
+    # never looked at — and the delivery gate cannot fail closed. Without the
+    # second, a run resumed after approval could deliver different bytes from
+    # the ones a person said yes to.
+    await _record_review(session, run, review, patch)
     await session.flush()
 
     if review.decision is PolicyDecision.ALLOW:
@@ -562,6 +576,11 @@ async def _review(
     result.final_state = target
     result.reason = f"security review returned {review.decision.value}"
 
+    if target is RunState.APPROVAL_PENDING:
+        # A run that pauses without an approval request pauses forever: there
+        # is nothing for a person to answer, and nothing to resume from.
+        await _request_approval(session, run, review, patch)
+
     if review.disagreements:
         logger.warning(
             "continuity.security_review_disagreement_persisted",
@@ -591,6 +610,100 @@ def _rejection_brief(record: AttemptRecord) -> list[str]:
             for rejected in record.patch.rejected
         ),
     ]
+
+
+async def _record_review(
+    session: AsyncSession,
+    run: MigrationRun,
+    review: SecurityReview,
+    patch: MigrationPatch,
+) -> None:
+    """Store the review and the patch identity on the run.
+
+    Written into `evidence_report` alongside the impact assessment rather than a
+    new column, because both answer the same question — what is this run's
+    recorded evidence — and the report builder already reads from there.
+    """
+    tracked = await session.get(MigrationRun, run.id) or run
+    stored = dict(tracked.evidence_report or {})
+    stored[SECURITY_REVIEW_KEY] = review.report()
+    # The diff's identity. The *files* digest is recorded by the caller that
+    # holds the workspace, because only it can read what the patch produced.
+    stored[PATCH_DIFF_DIGEST_KEY] = patch_digest(patch.diff)
+    tracked.evidence_report = stored
+    await session.flush()
+
+
+async def _request_approval(
+    session: AsyncSession,
+    run: MigrationRun,
+    review: SecurityReview,
+    patch: MigrationPatch,
+) -> None:
+    """Ask a person, in a row they can actually answer.
+
+    The request carries what a reviewer needs to decide without reading the
+    code: which findings blocked, what the agent advised, what policy ruled, and
+    the identity of the patch — so an approval granted for one patch cannot
+    later authorise a different one.
+    """
+    blocking = review.blocking
+    risk = max(
+        (finding.severity for finding in blocking),
+        default=Severity.MEDIUM,
+        key=_SEVERITY_ORDER.index,
+    )
+
+    approval = await create_request(
+        session,
+        ApprovalRequest(
+            project_id=run.project_id,
+            migration_run_id=run.id,
+            trigger=blocking[0].category.value if blocking else "security_review",
+            risk=risk,
+            requested_action={
+                "migration": f"{run.provider_id} {run.from_version} -> {run.to_version}",
+                "files": sorted(patch.applied),
+                PATCH_DIFF_DIGEST_KEY: patch_digest(patch.diff),
+                "findings": [finding.summary_dict() for finding in blocking],
+                "agent_recommendation": review.agent_recommendation.value,
+                "policy_decision": review.decision.value,
+            },
+            agent_recommendation=review.agent_recommendation.value,
+        ),
+    )
+
+    await events.emit(
+        session,
+        kind=ActivityEventKind.APPROVAL_REQUIRED,
+        actor="policy",
+        summary=(
+            f"{len(blocking)} finding(s) require a decision before this "
+            "migration can be delivered."
+        ),
+        project_id=run.project_id,
+        migration_run_id=run.id,
+    )
+
+    logger.info(
+        "continuity.approval_requested",
+        extra={
+            "migration_run_id": str(run.id),
+            "approval_id": str(approval.id),
+            "risk": risk.value,
+            "findings": len(blocking),
+        },
+    )
+
+
+#: Severity order, weakest first, for picking a request's headline risk.
+_SEVERITY_ORDER = [
+    Severity.INFO,
+    Severity.LOW,
+    Severity.MEDIUM,
+    Severity.HIGH,
+    Severity.CRITICAL,
+]
 
 
 def _failure_brief(record: AttemptRecord) -> str:

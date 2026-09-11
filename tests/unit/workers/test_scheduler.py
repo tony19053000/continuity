@@ -74,7 +74,7 @@ def patched_pipeline(monkeypatch: pytest.MonkeyPatch):
     return install
 
 
-async def _collaborators() -> dict[str, Any]:
+async def _collaborators(project_id: uuid.UUID) -> dict[str, Any]:
     return {}
 
 
@@ -190,7 +190,7 @@ async def test_a_failing_tick_does_not_kill_the_loop(
     scheduler = _scheduler()
     calls = {"n": 0}
 
-    async def explode_once() -> Any:
+    async def explode_once(project_id: uuid.UUID) -> Any:
         calls["n"] += 1
         if calls["n"] == 1:
             raise RuntimeError("transient")

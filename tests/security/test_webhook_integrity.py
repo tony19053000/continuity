@@ -130,6 +130,10 @@ async def _open_pull_request(
             from_version="v1",
             to_version="v2",
             state=RunState.MERGE_WAITING,
+            # Set by delivery on a real run. Post-merge verification checks the
+            # merged branch against it, so a fixture without one is a run that
+            # cannot be verified.
+            target_branch="continuity/migrate-acmepay-v2",
         )
         session.add(run)
         await session.flush()
@@ -306,10 +310,11 @@ async def test_the_provided_signature_is_never_stored(client: AsyncClient) -> No
 
 
 async def test_a_merged_pull_request_verifies_the_run(client: AsyncClient) -> None:
-    """C8-06 acceptance: merged → VERIFIED.
+    """C8-06 acceptance: merged → verification → VERIFIED.
 
-    There is no post-merge verification environment in this deployment, and
-    claiming one would be exactly the fake-green status the project forbids.
+    A merge no longer goes straight to VERIFIED. Post-merge verification checks
+    the merge is consistent with this run, and only then advances the baseline —
+    which is what makes the next pass diff from the right side.
     """
     record, run, _ = await _open_pull_request()
     body = _payload(merged=True)
@@ -328,6 +333,51 @@ async def test_a_merged_pull_request_verifies_the_run(client: AsyncClient) -> No
     assert pull is not None and pull.merged is True and pull.state == "closed"
     assert pull.merged_at is not None
     assert project is not None and project.state is RunState.MONITORING_ACTIVE
+
+    # The point of verifying: the baseline moved, so the next release is diffed
+    # from v2 rather than from v1 forever.
+    async with session_scope() as session:
+        from backend.providers.storage import baseline_version
+
+        refreshed_project = await session.get(Project, run.project_id)
+        assert refreshed_project is not None
+        assert (
+            await baseline_version(session, refreshed_project, "acmepay") == "v2"
+        )
+
+
+async def test_a_merge_inconsistent_with_the_run_is_not_verified(
+    client: AsyncClient,
+) -> None:
+    """A merge on a branch this run did not create proves nothing.
+
+    The baseline must not move on it: Continuity would then believe the project
+    runs against a version nothing verified it against, and the next real break
+    would be invisible.
+    """
+    from backend.providers.storage import baseline_version
+
+    _, run, _ = await _open_pull_request()
+
+    async with session_scope() as session:
+        tracked = await session.get(MigrationRun, run.id)
+        assert tracked is not None
+        tracked.target_branch = "continuity/migrate-acmepay-v9"
+        await session.flush()
+
+    body = _payload(merged=True)
+    response = await client.post("/webhooks/github", content=body, headers=_headers(body))
+
+    assert response.json()["status"] == "merged_unverified"
+
+    async with session_scope() as session:
+        refreshed = await session.get(MigrationRun, run.id)
+        project = await session.get(Project, run.project_id)
+        assert project is not None
+        assert await baseline_version(session, project, "acmepay") is None
+
+    assert refreshed is not None
+    assert refreshed.state is RunState.HUMAN_REVIEW_REQUIRED
 
 
 async def test_a_closed_unmerged_pull_request_returns_to_monitoring(
@@ -550,8 +600,14 @@ async def test_one_unreachable_repository_does_not_stop_the_sweep(
     assert refreshed is not None and refreshed.state is RunState.VERIFIED
 
 
-def test_settle_is_the_only_place_a_merge_becomes_a_state_change() -> None:
-    """One function, so the webhook and the poller cannot drift apart.
+def test_only_post_merge_verification_can_mark_a_run_verified() -> None:
+    """VERIFIED is earned, and one module grants it.
+
+    This used to name `github/webhooks.py`, because a merge went straight to
+    VERIFIED. It does not any more: the webhook and the poller both converge on
+    `settle()`, `settle()` calls verification, and verification is the only
+    thing that can move a run to VERIFIED and advance the baseline. Narrowing to
+    one owner is what stops "merged" and "verified" from meaning the same thing.
 
     Matched against parsed code rather than raw text, and narrowed to modules
     that can actually *move* a run: `models/base.py` names the member in a
@@ -588,7 +644,7 @@ def test_settle_is_the_only_place_a_merge_becomes_a_state_change() -> None:
         if names_verified and moves_runs:
             setters.append(path.relative_to(backend).as_posix())
 
-    assert sorted(setters) == ["github/webhooks.py"]
+    assert sorted(setters) == ["workers/post_merge.py"]
 
 
 def test_the_state_machine_permits_exactly_two_routes_into_verified() -> None:

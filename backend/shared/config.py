@@ -225,6 +225,11 @@ class Settings(BaseSettings):
     WORKSPACE_MAX_AGE_SECONDS: int = Field(default=86_400, ge=60)
 
     # ---- Provider monitoring --------------------------------------------
+    #: Whether the in-process scheduler starts with the application. Off in
+    #: tests and for one-off API processes; on is the product's normal state,
+    #: because monitoring nobody started is the gap this switch exists to make
+    #: visible rather than silent.
+    SCHEDULER_ENABLED: bool = True
     PROVIDER_POLL_INTERVAL_SECONDS: int = Field(default=3600, ge=60)
     PROVIDER_FETCH_TIMEOUT_SECONDS: int = Field(default=30, ge=1)
 
