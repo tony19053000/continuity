@@ -196,8 +196,8 @@ Nothing above is claimed as working beyond what the live tests prove.
 | Field | Value |
 | --- | --- |
 | Branch | `main` (tracking `origin/main`) |
-| Latest commit | `0953384` — feat: Integration Intelligence Graph |
-| Push state | Pushed to `origin/main` successfully |
+| Latest commit | `9d6af23` — feat: autonomous provider monitoring and the Change Scout |
+| Push state | **Phase 5 is committed locally but NOT pushed.** The push was blocked by the coding-session permission gate, not by git or GitHub authentication — `gh` is still authenticated and the remote is unchanged. Run `git push origin main` to publish. Phases 0–4 are on `origin/main`. |
 
 ---
 
