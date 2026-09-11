@@ -96,13 +96,41 @@ redirect → 422, unauthenticated `/auth/me` and `/auth/logout` → 401).
 Sign-in is verified as far as it can be without a human completing a Google
 consent screen. That last step is a manual check, not an automatable one.
 
-### B-04 · No TEE / Nitro Enclave infrastructure — **OPEN**, low priority
+### B-04 · No TEE / Nitro Enclave infrastructure — **OPEN**
 
-**Impact:** C9-03 cannot deliver hardware-backed attestation.
+**Corrected 2026-09-11.** This entry previously said "the
+`ConfidentialExecutionProvider` abstraction is built" and "the UI reports
+`TEE Attestation: Not Configured`". **Both were false**, and they contradicted
+the Security state table below, which has said "Not built" since Phase 6. The
+entry was written in Phase 0 describing the intended handling and was never
+corrected as the phases passed. Caught by grepping the codebase for the thing it
+claimed existed.
 
-**Handling:** the `ConfidentialExecutionProvider` abstraction is built and
-`DevelopmentIsolatedExecutor` remains functional. The UI reports
-`TEE Attestation: Not Configured`. **Attestation is never faked.**
+**What actually exists today:**
+
+| Claim | Reality |
+| --- | --- |
+| `ConfidentialExecutionProvider` protocol | **Does not exist.** No such name anywhere in `backend/` |
+| `AttestationDocument` | **Does not exist** |
+| `backend/security/attestation.py` | **Does not exist** |
+| A UI reporting attestation state | **Does not exist** — the frontend is three components |
+| `DevelopmentIsolatedExecutor` | **Exists and works** (C6-01). Process isolation, not sandboxing, and it says so |
+
+**Impact:** C9-03 is entirely unstarted, not partly done. It has to build the
+abstraction *and* the honesty guarantees, not just wire up hardware.
+
+**What is true and matters:** nothing anywhere claims attestation, because
+nothing mentions attestation at all. The honesty rule in
+`03_SECURITY_ACCESS.md` §7 is not violated — it is simply not yet exercised.
+
+**Handling:** C9-03 builds `ConfidentialExecutionProvider`,
+`backend/security/attestation.py`, and the test that asserts no code path can
+report an attested state without a verified document. Hardware-backed
+attestation on AWS Nitro Enclaves requires an EC2 instance type with enclave
+support (`m5.xlarge` or larger with `--enclave-options Enabled`), the
+`nitro-cli` toolchain, and a KMS key policy conditioned on the enclave's PCR
+measurements. None of that is provisioned, and it is not a prerequisite for the
+abstraction or the honesty tests.
 
 ### B-05 · AgentCore reachable but not provisioned — **OPEN**, deliberate
 
@@ -203,10 +231,10 @@ Counts above are from real runs, not estimates.
 | `GEMINI_MODEL` | Defaults to `gemini-2.5-flash`, confirmed present in the live model list |
 | Optional future provider | Amazon Bedrock — implemented, not in use |
 | AWS credentials | **Verified** — profile `continuity-dev`, region `us-west-2`, standard chain. No AWS key in `.env` |
-| AgentCore Runtime | Not provisioned — Phase 8 (C8-05), see B-05 |
-| AgentCore Observability | Not provisioned — Phase 8 |
-| AgentCore Identity | Not provisioned — Phase 8 |
-| AgentCore Gateway/Policy | Not provisioned; adoption conditional (§17) |
+| AgentCore Runtime | **Reachable, not provisioned** — verified live in C8-05, see B-05 |
+| AgentCore Observability | **Reachable, not provisioned** — verified live in C8-05 |
+| AgentCore Identity | **Reachable, not provisioned** — verified live in C8-05 |
+| AgentCore Gateway/Policy | **Reachable, not provisioned**; adoption still conditional on adding enforcement `policy.py` lacks (§17) |
 
 Nothing above is claimed as working beyond what the live tests prove.
 
@@ -218,10 +246,11 @@ Nothing above is claimed as working beyond what the live tests prove.
 | --- | --- |
 | Secret filtering | **Implemented** — path exclusion, content redaction, and repository `.gitignore` rules, at all five enforcement points |
 | Policy engine (ALLOW/ASK/DENY) | **Implemented** — `backend/security/policy.py`, matrix parity-tested against §4 |
-| Approval integrity | **State implemented** (C2-08); HTTP surface + resume flow in C8-02 |
+| Approval integrity | **Implemented** (C2-08 state, C8-02 HTTP surface and enforcement gate) — self-approval, the revoke-between-grant-and-execute race, and restart survival are all tested |
 | Repository boundary | **Implemented** — normalize-then-resolve, symlink-safe; one conformance suite over both sources |
-| Untrusted external content | Specified §5; exercised in C5-04 |
-| ExecutionProvider | Specified §6; implemented in C6-01 |
+| Untrusted external content | **Implemented** — C5-04 changelog containment, C8-06 webhook payloads treated as pointers rather than state |
+| ExecutionProvider | **Implemented** (C6-01) — argv-only, allowlisted, path-confined, credential-free environment |
+| Security review of the patch | **Implemented** (C8-01) — 13 finding categories, policy decides, disagreements persisted |
 | Confidential execution / TEE | **Not built.** `ExecutionProvider` exists and is process isolation, not sandboxing. No `ConfidentialExecutionProvider`, no attestation — see B-04 |
 | Committed secrets | None. Verified against the staged diff at each gate |
 
