@@ -19,6 +19,8 @@ dependencies = [
     "itsdangerous>=2.2",
     # RS256 App JWTs; the crypto extra pulls `cryptography`.
     "pyjwt[crypto]>=2.10",
+    # Provider specs are commonly served as YAML rather than JSON.
+    "pyyaml>=6.0",
 ]
 
 [project.optional-dependencies]
@@ -28,6 +30,7 @@ dev = [
     "ruff>=0.9",
     "mypy>=1.14",
     "aiosqlite>=0.20",
+    "types-pyyaml>=6.0",
 ]
 
 [build-system]

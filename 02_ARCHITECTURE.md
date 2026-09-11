@@ -467,8 +467,22 @@ Deferred until the core seven work:
   (`backend/orchestration/state_machine.py`), not in the Orchestrator's prompt.
 - The **Security Reviewer recommends**; `backend/security/policy.py` decides.
 - The **Change Scout must not invent provider changes.** Every reported change
-  carries a source reference. Deterministic spec diffing produces the change
-  set; the model supplies semantic interpretation only.
+  carries a source reference, and that reference is bound from the document
+  Continuity fetched rather than supplied by the model. The model instead
+  returns `evidence_quote`, a sentence that must appear in that document; a
+  change whose quote is not found there is discarded before it is recorded.
+  Deterministic spec diffing produces the change set; the model supplies
+  semantic interpretation only.
+
+  This is an amendment. The agent originally returned its own `SourceRef`, on
+  the reasoning that a change it could not attribute was one it may have
+  invented. Live Gemini filled that field with plausible placeholders
+  (`url="changelog"`, `document_hash="acmepay-v2-changelog"`), which satisfied
+  the attribution check while attributing nothing, and on other runs returned an
+  empty URL and had true findings discarded. Asking a model to supply provenance
+  it has no way to know produces exactly that: a control that admits invented
+  values and rejects real ones at random. A quote is checkable, because
+  Continuity holds the document.
 - Only the **Migration Engineer** writes files, and only inside the migration
   workspace.
 
@@ -712,7 +726,8 @@ similarity threshold. Below the threshold it stays two separate changes.
 
 **Changelog-derived** — no reliable spec representation; extracted by the Change
 Scout from prose changelogs, release notes, or SDK registry metadata, and always
-carrying a `SourceRef`.
+carrying a `SourceRef` bound from the fetched document plus a verified
+`evidence_quote` (see the Change Scout rule above).
 
 `rate_limit_changed`, `sdk_deprecated`, `api_version_deprecated`,
 `documentation_only`.

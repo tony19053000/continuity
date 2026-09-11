@@ -7,17 +7,18 @@ message disagrees with it, this file is right and the other is stale.
 
 ## Overall completion
 
-**50%**
+**60%**
 
-Phases 0–4 complete. The Integration Intelligence Graph is real and populated by
-a live model: Gemini infers business workflows over deterministic extraction, and
-`blast_radius` traces a provider change to the files, functions, workflows, and
-tests it reaches. Test suite has **zero skips**.
+Phases 0–5 complete. Continuity now watches providers on its own: a pluggable
+adapter fetches spec versions, a deterministic differ computes the change set,
+and the Change Scout adds what only prose reveals — each change grounded in a
+sentence checked against the document Continuity fetched. Repeated polling of the
+same version produces exactly one change event. Test suite has **zero skips**.
 
 | Field | Value |
 | --- | --- |
-| Current phase | Phase 5 — Provider monitoring + Change Scout |
-| Current ticket | C5-01 — ProviderAdapter interface and registry |
+| Current phase | Phase 6 — Execution safety, impact analysis, rehearsal |
+| Current ticket | C6-01 — ExecutionProvider |
 | Last updated | 2026-09-11 |
 
 ---
@@ -31,7 +32,7 @@ tests it reaches. Test suite has **zero skips**.
 | 2 | Strands + core orchestration | 30% | **DONE** — reviewer PASS |
 | 3 | GitHub + safe repository ingestion | 40% | **DONE** — reviewer PASS |
 | 4 | Integration Mapper + Intelligence Graph | 50% | **DONE** — reviewer PASS |
-| 5 | Provider monitoring + Change Scout | 60% | IN PROGRESS |
+| 5 | Provider monitoring + Change Scout | 60% | **DONE** — reviewer PASS |
 | 6 | Execution safety, impact analysis, rehearsal | 70% | PENDING |
 | 7 | Migration Engineer + repair loop | 80% | PENDING |
 | 8 | Security + approval + GitHub PR | 90% | PENDING |
@@ -41,10 +42,10 @@ tests it reaches. Test suite has **zero skips**.
 
 ## Tickets
 
-**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04
+**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05
 **In progress:** none
-**Next:** C5-01 — ProviderAdapter interface and registry
-**Pending:** C5-01 onward — see `05_FEATURE_TICKETS.md`
+**Next:** C6-01 — ExecutionProvider
+**Pending:** C6-01 onward — see `05_FEATURE_TICKETS.md`
 
 ---
 
@@ -101,18 +102,35 @@ Not a regression: AgentCore is Phase 8 (C8-05). AWS access is now verified, so
 the prerequisite is met. `BedrockAgentCoreFullAccess` is attached to the
 `continuity-dev` user.
 
+### B-06 · No scheduler process — **OPEN**, recorded at the Phase 5 review
+
+`monitor_project()` is a callable worker function. **Nothing invokes it
+periodically.** There is no cron, no dispatcher, no loop — provider monitoring
+runs when something calls it, and in this repository the only callers are tests.
+
+What *is* proven: the monitor is independent of the API layer (asserted at the
+import graph, and by an integration test that never constructs an HTTP client),
+so nothing about it requires a user request. What is **not** built is the process
+that would call it every N minutes in production.
+
+C5-05's Files list names only `backend/workers/provider_monitor.py`, so this is
+within ticket scope rather than an unfinished ticket — the same shape as
+`backend/workers/repository_scan.py` from Phase 3. It is recorded here so that
+"Continuity monitors providers autonomously" is never read as "a scheduler is
+running". Scheduling infrastructure belongs with deployment (Phase 8, C8-05).
+
 ---
 
 ## Tests
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **516 passing, 0 skipped** |
-| Security | `uv run pytest tests/security` | **145 passing** |
+| Python unit + integration | `uv run pytest` | **656 passing, 0 skipped** |
+| Security | `uv run pytest tests/security` | **198 passing** |
 | Frontend unit | `npm run test` | **17 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
-| Typecheck (py) | `uv run mypy backend` | **Passing** (56 source files) |
+| Typecheck (py) | `uv run mypy backend` | **Passing** (63 source files) |
 | Lint (web) | `npm run lint` | **Passing** |
 | Typecheck (web) | `npm run typecheck` | **Passing** |
 | Build (web) | `npm run build` | **Passing** — routes `/`, `/signin` |
@@ -120,6 +138,8 @@ the prerequisite is met. `BedrockAgentCoreFullAccess` is attached to the
 | Live integrations | `uv run pytest tests/integration/test_external_integrations.py` | **9 passing** — AWS, GitHub App, Google OAuth |
 | Live Strands + Gemini | `uv run pytest tests/integration/test_strands_roundtrip.py` | **3 passing** — real tool call proven |
 | Live workflow inference | `uv run pytest tests/integration/test_phase4_live.py` | **3 passing** — Gemini names real workflows |
+| Live changelog interpretation | `uv run pytest tests/integration/test_phase5_live.py` | **3 passing** — Gemini extracts changelog-derived changes; injection contained |
+| Provider monitoring (end to end) | `uv run pytest tests/integration/test_provider_monitoring.py` | **14 passing** — new adapter plugged in, dedup proven |
 
 Counts above are from real runs, not estimates.
 
@@ -613,3 +633,95 @@ is structural.
 
 **Next intended task:** Phase 5, C5-01 — the `ProviderAdapter` interface and
 registry, then provider monitoring and the Change Scout.
+
+---
+
+### 2026-09-11 — Phase 5, provider monitoring and the Change Scout
+
+**What was built:** The half of Continuity that notices things. `ProviderAdapter`
+plus a registry (C5-01), content-addressed document storage (C5-02), a
+deterministic OpenAPI differ (C5-03), the Change Scout (C5-04), and the
+monitoring worker that drives them (C5-05).
+
+The division of labour from `02_ARCHITECTURE.md` §10 is now real code: the differ
+emits the 14 spec-derivable `ChangeType` members and physically cannot emit a
+changelog-derived one — `_change()` raises if asked. The Change Scout emits only
+the 4 changelog-derived members and drops the rest. Live Gemini finds all four
+from a prose changelog, reproducibly.
+
+**Verification:** All 8 gate checks pass. 656 backend tests (up from 516), 198
+security, 17 frontend, 0 skips. Live Gemini proves the Change Scout against the
+real model, and the Phase 5 live test was run five consecutive times before being
+accepted, because the first version of it was flaky for a reason that turned out
+to be a defect (below).
+
+**Defects found by the review gate — all four were green before they were found:**
+
+1. **A rename hid every field change that came with it.** `SpecDiffer.diff`
+   popped a renamed pair from `removed`/`added` and emitted one
+   `endpoint_renamed`; the operation-level diff then ran only over
+   `set(old_ops) & set(new_ops)`, which the pair was no longer in. A provider
+   that renamed a path *and* made a field required reported only the rename. The
+   migration would have moved the path, missed the field, compiled, shipped, and
+   400'd in production. Fixed by diffing the renamed pair, keyed to the new
+   operation.
+
+2. **Deduplication crashed on the second poll.** `_record_changes` called
+   `session.add()` *outside* the savepoint, so a duplicate's failed flush left
+   the insert pending on the outer session and every later operation raised
+   `PendingRollbackError`. The savepoint existed, was reviewed, read correctly,
+   and did nothing — polling an unchanged provider twice was exactly the case it
+   was written for. Fixed by opening the savepoint before adding the row.
+
+3. **`CHANGE_DETECTED` was logged but never written.** `_record_changes` mutated
+   the `Project` it was handed, which may be attached to a different session.
+   The transition record was correct and the project row never moved: a run that
+   looked started and was not. Fixed by resolving the session-tracked instance.
+
+4. **The Change Scout's anti-invention control admitted invented values.** It
+   required the *model* to supply a `SourceRef`. Live Gemini returned
+   `url="changelog"`, `document_hash="acmepay-v2-changelog"` — fabricated, and
+   passing the check — while on other runs it returned an empty URL and four
+   true findings were discarded. A control that accepts invention and rejects
+   truth at random is worse than none, and it was nondeterministic, so it looked
+   fine roughly half the time.
+
+   Replaced with `evidence_quote`: the model must quote a sentence, and code
+   checks that sentence against the document Continuity actually fetched. The
+   `SourceRef` is now bound from the fetch, where it is a fact rather than a
+   claim. This is the C5-04 criterion "the agent cannot introduce a change absent
+   from the changelog" implemented rather than approximated. Amendment recorded
+   in `02_ARCHITECTURE.md`.
+
+   Related, found by the same flaky live test: the model's `injection_suspected`
+   was OR-ed into the authoritative security flag, and live Gemini raises it on a
+   completely benign changelog on roughly a quarter of runs. A security flag that
+   fires on ordinary provider releases is one nobody reads. It is now recorded
+   separately as `model_reported_injection` — advisory, logged, and unable to
+   mark a document hostile on its own. The deterministic detection is
+   authoritative because it can quote what it found.
+
+**Found by the reviewer:** `ChangeType.spec_derivable()` was dead code, and the
+enum docstring claimed the two halves were "asserted disjoint and complete by
+test" when nothing asserted it — both test files re-derived the set by exclusion
+instead. A member added to the enum and to neither half would have been silently
+un-emittable by the differ and silently un-acceptable from the Scout, with every
+test green. Now asserted in `tests/unit/models/test_enums.py`, and both call
+sites use the method.
+
+**What is NOT built:** no scheduler. See B-06. `monitor_project()` is a callable;
+nothing calls it periodically. Its independence from the API layer is proven; its
+periodic invocation does not exist.
+
+**Do not accidentally change:**
+- `_change()`'s changelog-derived guard in `diff.py`, or the differ silently
+  becomes a second, unattributable source of changelog claims.
+- The savepoint opening *before* `session.add()` in `_record_changes`.
+- `evidence_quote` being checked against the fetched document. Asking the model
+  for provenance instead was tried, and it fabricated it.
+- `injection_suspected` being deterministic-only.
+- The `ChangeEvent` unique constraint — it is the dedup key, enforced by the
+  database rather than by application logic.
+
+**Next intended task:** Phase 6, C6-01 — `ExecutionProvider`, argv-only and
+allowlisted, then impact analysis and migration rehearsal.

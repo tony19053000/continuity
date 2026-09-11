@@ -15,7 +15,7 @@ from __future__ import annotations
 from pydantic import BaseModel, ConfigDict, Field
 
 from backend.models.enums import ChangeType, FindingCategory, PolicyDecision, Severity
-from backend.models.schemas import Evidence, SourceRef
+from backend.models.schemas import Evidence
 
 
 class _Contract(BaseModel):
@@ -41,15 +41,36 @@ class ChangeScoutInput(_Contract):
 
 
 class ScoutedChange(_Contract):
+    """One change the changelog states and the differ could not see.
+
+    Note what is *not* asked for: a `SourceRef`. An earlier version required one,
+    on the reasoning that a change the agent cannot attribute is one it may have
+    invented. In practice the agent reads exactly one document and has no way to
+    know its URL or hash, so it filled the field with plausible placeholders --
+    live Gemini returned `url="changelog"`, `document_hash="acmepay-v2-changelog"`
+    -- which passed the attribution check while attributing nothing, and on other
+    runs returned an empty URL and had real findings discarded. A control that
+    admits invented values and rejects true ones at random is worse than none.
+
+    `evidence_quote` replaces it with something code can actually check: the
+    sentence must appear in the document Continuity fetched, or the change is
+    dropped. Provenance is then bound from that fetch, where it is a fact.
+    """
+
     change_type: ChangeType
     resource: str
     breaking: bool
     security_relevant: bool
     authentication_relevant: bool
     rationale: str = Field(max_length=1000)
-    # Required: a change Continuity cannot attribute is a change it will not
-    # report. This is the schema-level expression of "never invent a change".
-    source: SourceRef
+    evidence_quote: str = Field(
+        max_length=500,
+        description=(
+            "A sentence copied word for word from the changelog that states "
+            "this change. It is checked against the document, so it must be "
+            "quoted exactly rather than paraphrased."
+        ),
+    )
 
 
 class ChangeScoutOutput(_Contract):

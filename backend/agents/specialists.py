@@ -65,8 +65,13 @@ given to you as context. Your job is to add what prose reveals and to reconcile
 the two — for example, confirming that an endpoint the differ saw removed is the
 one the changelog describes as deprecated.
 
-Never invent a change. Every change you report must carry a source reference to
-the document it came from.""",
+Never invent a change. For every change you report, evidence_quote must be a
+sentence copied word for word from the changelog you were given. It is checked
+against that document automatically, and a change whose quote is not found there
+is discarded — so quote exactly rather than paraphrasing, summarising, or
+reconstructing what a sentence probably said. If the changelog does not state a
+change, do not report it: there is no credit for volume, and a discarded change
+is worse than an omitted one.""",
         allowed_tools=frozenset(),
         input_model=ChangeScoutInput,
         output_model=ChangeScoutOutput,
