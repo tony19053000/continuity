@@ -828,8 +828,23 @@ checkout at a pinned source commit — and records:
 `source_commit`, `target_branch`, `files_changed`, `commands_executed`,
 `tests_executed`, `agent_attempts`, `security_findings`, `patch_diff`.
 
+Implemented in `backend/migrations/workspace.py` as a `git worktree --detach` at
+the pinned commit. `git worktree` is allowlisted two levels deep (`add`,
+`remove`, `prune`, `list`) rather than `git` being opened up: none of those
+reach the network, and the paths they receive are constructed in that module,
+never by a model.
+
+Writes go through `workspace.write_file`, which resolves the target and refuses
+anything landing outside the root — including through a symlink planted inside
+it, which is the case a string-prefix check accepts. The patch itself comes from
+`git diff`, not from the writes Continuity happened to record, so a change made
+by a command a migration ran is in the diff too.
+
 Cleanup is deterministic: workspaces are removed on run completion, failure, and
-process restart (orphan sweep on startup).
+process restart (orphan sweep on startup). The sweep touches only directories
+carrying the `continuity-ws-` prefix — the workspace root may be shared, and
+deleting something Continuity did not create would be far worse than leaking a
+directory.
 
 ### Repair loop
 
@@ -842,7 +857,23 @@ Migration Engineer → patch → Validator
 ```
 
 - `MAX_REPAIR_ATTEMPTS` (default 3, configurable) is enforced in application
-  code, not by the model.
+  code, not by the model. Counted from persisted `migration_attempts` rows, so
+  a restart mid-run cannot hand the loop a fresh budget, and the table's unique
+  constraint on `(migration_run_id, attempt_number)` refuses a duplicate even
+  under a race.
+- **A model failure is a spent attempt, never a crashed run.** An engineer that
+  errors, or returns a patch with no applicable edit, consumes one attempt and
+  is retried. Letting either propagate would abandon the migration mid-flight
+  with the workspace half-patched, no attempt row explaining why, and the budget
+  bypassed entirely — nothing recorded means nothing spent.
+- **Rejected edits are fed back.** An edit discarded for being outside the
+  impact set tells the next attempt so, by path and reason. Without it the next
+  attempt learns only that tests failed, and can propose the same rejected edit
+  until the budget is gone.
+- A finding that *blocks* is one a human must decide: a credential in the patch
+  (DENY), a new dependency or a test modification (ASK). An edit discarded
+  before it reached disk is recorded but does not block — nothing happened, so
+  there is nothing to approve.
 - Each attempt records: attempt number, failure evidence, diagnosis summary,
   files modified, tests executed, outcome.
 - On exhaustion the run enters `HUMAN_REVIEW_REQUIRED`. It never loops
@@ -860,12 +891,26 @@ Migration Engineer → patch → Validator
 - **Execution** — through `ExecutionProvider` only (see
   `03_SECURITY_ACCESS.md` §6): timeout, cwd boundary, filtered environment,
   output caps, cancellation, audit log.
-- **Parsing** — machine-readable output (`--json-report`, JUnit XML) preferred
-  over scraping human output.
+- **Parsing** — machine-readable output preferred over scraping human output.
+  vitest and jest both emit a JSON report, and it is located within the output
+  rather than assumed to be the whole of stdout, because both print warnings
+  around it. pytest is read from its summary line.
 - **Evidence** — pass/fail counts, failing test ids, and captured failure output
-  are persisted; the UI and the PR body read from these records.
+  are persisted; the UI and the PR body read from these records. Output is
+  secret-filtered before storage: repository output is untrusted, and these
+  excerpts are read into a browser.
 
-Test results are never produced by a model.
+Discovery **fails loudly**. A project with no evidence of a runner raises
+`TestCommandNotFound` rather than defaulting to a command: "we could not find
+your tests" and "your tests failed" must never look the same. Output that will
+not parse raises `UnparseableTestOutput` for the same reason — returning zeroes
+would make a suite that never ran indistinguishable from a clean one, because
+"0 failed" reads as a pass. A timeout carries no counts at all.
+
+Test results are never produced by a model. The guarantee is structural:
+`store_result` accepts a `ParsedTestResult`, and the only way to obtain one is
+`parse_result`, whose sole input is a `CommandResult` — the output of a process.
+There is no signature in the path that a model's output fits.
 
 ---
 

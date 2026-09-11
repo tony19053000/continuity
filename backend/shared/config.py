@@ -217,6 +217,13 @@ class Settings(BaseSettings):
     EXECUTION_MAX_OUTPUT_BYTES: int = Field(default=1_048_576, ge=1024)
     CONTEXT_BUDGET_BYTES: int = Field(default=200_000, ge=1024)
 
+    # ---- Migration workspaces -------------------------------------------
+    #: Where isolated migration worktrees are created. Empty means a directory
+    #: under the system temp root, chosen at startup — a path, not a credential,
+    #: so a default is a documented convenience rather than an invented value.
+    WORKSPACE_ROOT: str = ""
+    WORKSPACE_MAX_AGE_SECONDS: int = Field(default=86_400, ge=60)
+
     # ---- Provider monitoring --------------------------------------------
     PROVIDER_POLL_INTERVAL_SECONDS: int = Field(default=3600, ge=60)
     PROVIDER_FETCH_TIMEOUT_SECONDS: int = Field(default=30, ge=1)

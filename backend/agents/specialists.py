@@ -192,7 +192,10 @@ You are the Migration Engineer. You produce the minimal code change that adapts
 this project to a provider's new contract.
 
 Constraints:
-- Change only files in the impact set. If another file must change, say why.
+- Change only files in the impact set. If another file genuinely must change,
+  set out_of_impact_justification on that edit explaining why the change cannot
+  be made without it. An edit outside the impact set without that field is
+  discarded before it reaches disk, so leaving it blank loses the edit.
 - Preserve unrelated code and existing style.
 - Do not delete a test. If you believe a test is now invalid, set
   modifies_tests and justify it — that becomes a human decision, not yours.
@@ -207,23 +210,45 @@ Repeating the same patch is worse than reporting that you are stuck.""",
     )
 
     def build_prompt(self, task: MigrationEngineerInput) -> str:
+        change = task.change
         parts = [
             f"Provider: {task.provider_id} ({task.from_version} -> {task.to_version})",
             f"Attempt: {task.attempt_number}",
+            (
+                "The provider change to adapt to:\n"
+                f"- type: {change.change_type.value}\n"
+                f"- resource: {change.resource}\n"
+                f"- breaking: {change.breaking}\n"
+                f"- detail: {change.rationale}"
+            ),
             "Impact:\n"
             f"- files: {', '.join(task.impact.affected_files) or 'none'}\n"
             f"- symbols: {', '.join(task.impact.affected_symbols) or 'none'}\n"
-            f"- workflows: {', '.join(task.impact.affected_workflows) or 'none'}",
+            f"- workflows: {', '.join(task.impact.affected_workflows) or 'none'}\n"
+            f"- analysis: {task.impact.reasoning_summary}",
         ]
         if task.previous_failure:
             parts.append(
                 "The previous attempt failed. Evidence:\n" + task.previous_failure
             )
         parts.append(
-            "Current file contents:\n"
+            "Files you may edit:\n"
             + "\n\n".join(
                 f"--- {path} ---\n{content}" for path, content in task.file_contents.items()
             )
+        )
+        if task.reference_contents:
+            parts.append(
+                "For reference only — DO NOT EDIT these. They show how the code "
+                "above is called, so your change must keep working for them:\n"
+                + "\n\n".join(
+                    f"--- {path} (read-only) ---\n{content}"
+                    for path, content in task.reference_contents.items()
+                )
+            )
+        parts.append(
+            "Impact set (files you may edit freely):\n"
+            + ("\n".join(f"- {path}" for path in task.impact_set) or "- none")
         )
         parts.append("Produce the minimal edit set that makes this integration correct.")
         return "\n\n".join(parts)

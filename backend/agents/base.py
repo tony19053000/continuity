@@ -27,6 +27,7 @@ from typing import Any, Protocol
 
 from pydantic import BaseModel, ValidationError
 from strands import Agent
+from strands.types.exceptions import StructuredOutputException
 
 from backend.models.enums import AgentRole
 from backend.observability.logging import get_logger
@@ -197,7 +198,16 @@ class ContinuityAgent[TIn: BaseModel, TOut: BaseModel](ABC):
                     prompt=prompt,
                     output_model=contract.output_model,
                 )
-            except (ValidationError, AgentOutputInvalid) as exc:
+            except (
+                ValidationError,
+                AgentOutputInvalid,
+                # The model declined to invoke the structured-output tool at
+                # all. Transient in exactly the way the two above are, and
+                # Gemini does it intermittently on large schemas — not retrying
+                # spent a whole repair attempt on a failure that usually clears
+                # on the next call.
+                StructuredOutputException,
+            ) as exc:
                 last_error = exc
                 logger.warning(
                     "continuity.agent_output_invalid",

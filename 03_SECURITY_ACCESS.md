@@ -258,7 +258,11 @@ Guarantees:
 - `argv` is a list; there is no shell interpretation and no
   model-generated command string is ever executed.
 - Executables are allowlisted (`pytest`, `python`, `npm`, `npx`, `node`,
-  `ruff`, `mypy`, `tsc`, `git` with a restricted subcommand set).
+  `ruff`, `mypy`, `tsc`, `git` with a restricted subcommand set). `git` is
+  restricted a second level where it matters: `worktree` permits only `add`,
+  `remove`, `prune`, and `list`, so migration isolation does not require opening
+  up `git` as a whole. A subcommand cannot hide behind a flag — `git -c x=y
+  push` reads as `push`, not as "no subcommand, therefore fine".
 - `cwd` is resolved and asserted to be inside the migration workspace root;
   symlink escapes are rejected.
 - Environment is constructed explicitly. Continuity's own AWS, GitHub, and
@@ -360,6 +364,12 @@ Python standard library, and small well-maintained packages.
 
 New dependencies introduced *by a generated migration patch* are a security
 finding and trigger ASK — the supply chain is part of the review surface.
+
+They are detected by parsing the manifests before and after the patch, not by
+asking the agent what it added. An omission in the agent's own list would
+otherwise walk a package straight past this review. A manifest that will not
+parse yields nothing rather than a phantom dependency list assembled from parse
+damage.
 
 ---
 

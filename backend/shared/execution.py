@@ -56,10 +56,15 @@ from backend.shared.redaction import contains_secret, detected_secret_kinds, red
 # Allowlists
 # ---------------------------------------------------------------------------
 
+#: Allowed subcommands for one executable. `None` as a value means "this
+#: subcommand takes any arguments"; a frozenset restricts the *next* non-flag
+#: token too, which is how `git worktree` is permitted without permitting all of
+#: `git worktree`.
+Subcommands = Mapping[str, frozenset[str] | None]
+
 #: Executables Continuity may run, by bare name. From `03_SECURITY_ACCESS.md` §6.
-#: A value of `None` means any arguments; a set means the first argument must be
-#: one of those subcommands.
-ALLOWED_EXECUTABLES: Final[Mapping[str, frozenset[str] | None]] = {
+#: A value of `None` means any arguments at all.
+ALLOWED_EXECUTABLES: Final[Mapping[str, Subcommands | None]] = {
     "pytest": None,
     "python": None,
     "python3": None,
@@ -73,23 +78,26 @@ ALLOWED_EXECUTABLES: Final[Mapping[str, frozenset[str] | None]] = {
     # rewrite history, so it is restricted to reads and local, additive writes.
     # Absent by design: `push` (delivery is branch-and-PR through the GitHub
     # App, never a shell), `remote` and `config` (both can redirect where code
-    # goes or install a credential helper), `submodule` (fetches arbitrary
-    # repositories), and anything that rewrites history.
-    "git": frozenset(
-        {
-            "status",
-            "diff",
-            "add",
-            "commit",
-            "checkout",
-            "switch",
-            "branch",
-            "rev-parse",
-            "ls-files",
-            "log",
-            "show",
-        }
-    ),
+    # goes or install a credential helper), `submodule` and `clone` (both fetch
+    # arbitrary repositories), and anything that rewrites history.
+    "git": {
+        "status": None,
+        "diff": None,
+        "add": None,
+        "commit": None,
+        "checkout": None,
+        "switch": None,
+        "branch": None,
+        "rev-parse": None,
+        "ls-files": None,
+        "log": None,
+        "show": None,
+        # Migration isolation (C7-01). Restricted a second level: `add` creates
+        # a checkout at a path Continuity constructs, and the other three are
+        # local bookkeeping. Nothing here reaches the network, and `git worktree`
+        # with no action is refused rather than treated as harmless.
+        "worktree": frozenset({"add", "remove", "prune", "list"}),
+    },
 }
 
 #: Environment variables a child may receive. Allowlist, not denylist: a name
@@ -352,18 +360,30 @@ class DevelopmentIsolatedExecutor:
                 f"{sorted(ALLOWED_EXECUTABLES)}"
             )
 
-        allowed_subcommands = ALLOWED_EXECUTABLES[spec.executable]
-        if allowed_subcommands is None:
+        allowed = ALLOWED_EXECUTABLES[spec.executable]
+        if allowed is None:
             return
 
-        subcommand = next(
-            (argument for argument in spec.argv[1:] if not argument.startswith("-")),
-            None,
-        )
-        if subcommand is None or subcommand not in allowed_subcommands:
+        # Flags are skipped so `git -c user.name=x push` reads as `push` rather
+        # than as "no subcommand, therefore fine".
+        tokens = [argument for argument in spec.argv[1:] if not argument.startswith("-")]
+
+        subcommand = tokens[0] if tokens else None
+        if subcommand is None or subcommand not in allowed:
             raise SubcommandNotAllowed(
                 f"{spec.executable} {subcommand!r} is not permitted. Allowed: "
-                f"{sorted(allowed_subcommands)}"
+                f"{sorted(allowed)}"
+            )
+
+        nested = allowed[subcommand]
+        if nested is None:
+            return
+
+        action = tokens[1] if len(tokens) > 1 else None
+        if action is None or action not in nested:
+            raise SubcommandNotAllowed(
+                f"{spec.executable} {subcommand} {action!r} is not permitted. "
+                f"Allowed: {sorted(nested)}"
             )
 
     def _check_environment(self, spec: CommandSpec) -> None:

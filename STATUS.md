@@ -7,20 +7,20 @@ message disagrees with it, this file is right and the other is stale.
 
 ## Overall completion
 
-**70%**
+**80%**
 
-Phases 0–6 complete. Continuity now decides whether a provider change matters
-*here*, and proves it before touching code: changes are correlated to the graph
-deterministically, most reach nothing and cost no model call, and a rehearsal
-runs the affected tests against both sides of the contract through a confined
-executor. Every command runs argv-only, in a path-confined workspace, with a
-constructed environment holding none of Continuity's credentials. Test suite has
-**zero skips**.
+Phases 0–7 complete. Continuity now writes the patch. Each migration runs in an
+isolated git worktree — the user's checkout is byte-identical afterwards — and
+every proposed edit is checked before a byte reaches disk: out of scope,
+credential-shaped, or removing a test, and it is discarded. Tests are discovered
+from the project's own files, run through the confined executor, and parsed from
+real output. When the patch fails, the repair loop responds to the evidence,
+bounded by a budget counted from database rows. Test suite has **zero skips**.
 
 | Field | Value |
 | --- | --- |
-| Current phase | Phase 7 — Migration Engineer + repair loop |
-| Current ticket | C7-01 |
+| Current phase | Phase 8 — Security + approval + GitHub PR |
+| Current ticket | C8-01 |
 | Last updated | 2026-09-11 |
 
 ---
@@ -36,7 +36,7 @@ constructed environment holding none of Continuity's credentials. Test suite has
 | 4 | Integration Mapper + Intelligence Graph | 50% | **DONE** — reviewer PASS |
 | 5 | Provider monitoring + Change Scout | 60% | **DONE** — reviewer PASS |
 | 6 | Execution safety, impact analysis, rehearsal | 70% | **DONE** — reviewer PASS |
-| 7 | Migration Engineer + repair loop | 80% | PENDING |
+| 7 | Migration Engineer + repair loop | 80% | **DONE** — reviewer PASS |
 | 8 | Security + approval + GitHub PR | 90% | PENDING |
 | 9 | Production security + frontend + polish | 100% | PENDING |
 
@@ -44,10 +44,10 @@ constructed environment holding none of Continuity's credentials. Test suite has
 
 ## Tickets
 
-**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05, C6-01 … C6-04
+**Completed:** C0-01 … C0-04, C1-01 … C1-07, C2-01 … C2-08, C3-01 … C3-06, C4-01 … C4-04, C5-01 … C5-05, C6-01 … C6-04, C7-01 … C7-04
 **In progress:** none
-**Next:** C7-01 — see `05_FEATURE_TICKETS.md`
-**Pending:** C7-01 onward
+**Next:** C8-01 — see `05_FEATURE_TICKETS.md`
+**Pending:** C8-01 onward
 
 ---
 
@@ -127,12 +127,12 @@ running". Scheduling infrastructure belongs with deployment (Phase 8, C8-05).
 
 | Suite | Command | State |
 | --- | --- | --- |
-| Python unit + integration | `uv run pytest` | **799 passing, 0 skipped** |
-| Security | `uv run pytest tests/security` | **271 passing** |
+| Python unit + integration | `uv run pytest` | **925 passing, 0 skipped** |
+| Security | `uv run pytest tests/security` | **277 passing** |
 | Frontend unit | `npm run test` | **17 passing** |
 | E2E | `npm run test:e2e` | Not yet created (Phase 9) |
 | Lint (py) | `uv run ruff check .` | **Passing** |
-| Typecheck (py) | `uv run mypy backend` | **Passing** (70 source files) |
+| Typecheck (py) | `uv run mypy backend` | **Passing** (77 source files) |
 | Lint (web) | `npm run lint` | **Passing** |
 | Typecheck (web) | `npm run typecheck` | **Passing** |
 | Build (web) | `npm run build` | **Passing** — routes `/`, `/signin` |
@@ -145,6 +145,10 @@ running". Scheduling infrastructure belongs with deployment (Phase 8, C8-05).
 | Execution containment | `uv run pytest tests/security/test_execution.py` | **70 passing** — real processes, real kills |
 | Rehearsal | `uv run pytest tests/unit/validation` | **23 passing** — real pytest runs, real deltas |
 | Live impact judgment | `uv run pytest tests/integration/test_phase6_live.py` | **3 passing** — Gemini judges a real change set |
+| Migration workspace | `uv run pytest tests/unit/migrations` | **27 passing** — real worktrees, source proven untouched |
+| Patch rules | `uv run pytest tests/unit/agents/test_migration_engineer.py` | **40 passing** — scope, secrets, tests, dependencies |
+| Repair loop | `uv run pytest tests/unit/orchestration/test_repair.py` | **18 passing** — real pytest runs, budget counted from rows |
+| Live migration | `uv run pytest tests/integration/test_phase7_live.py` | **3 passing** — Gemini patches a real project; 15/15 consecutive |
 
 Counts above are from real runs, not estimates.
 
@@ -820,3 +824,102 @@ assertion about a file rather than a record of having read it.
 
 **Next intended task:** Phase 7, C7-01 — the Migration Engineer and the bounded
 repair loop.
+
+---
+
+### 2026-09-11 — Phase 7, Migration Engineer and the bounded repair loop
+
+**What was built:** The part that actually changes code. Isolated migration
+workspaces (C7-01), the Migration Engineer and the rules its patches must
+survive (C7-02), deterministic test discovery, execution, and parsing (C7-03),
+and the bounded repair loop (C7-04).
+
+**The isolation is real.** Each run gets a `git worktree --detach` at a pinned
+commit. The user's checkout is byte-identical afterwards, asserted by a
+recursive hash over content *and* layout, and `git status` in the source repo
+stays clean. Writes resolve through the workspace root and are refused
+otherwise, including through a symlink planted inside it.
+
+**Verification:** All 8 gate checks pass. 925 backend tests (up from 799), 277
+security, 17 frontend, 0 skips. Live Gemini writes a real patch against a real
+project and the loop repairs it end to end — run **15 consecutive times with no
+failures** before being accepted, because the first version of it failed roughly
+one run in six.
+
+**Defects found during implementation:**
+
+1. **The Migration Engineer was never told what changed.** `MigrationEngineerInput`
+   carried the impact — which files, which symbols — and not the provider change
+   itself. Live Gemini refused, correctly: *"Cannot proceed without acmepay v2
+   contract details."* The agent was being told where to edit and never what to
+   edit for. Found only because the live test ran; every scripted test passed.
+
+2. **A model failure crashed the whole run.** An exception from the engineer
+   propagated out of the loop, abandoning the migration with the workspace
+   half-patched, no attempt row explaining why, and the budget bypassed entirely
+   — nothing recorded means nothing spent. Now a spent attempt, retried.
+
+3. **An empty patch escalated on the first occurrence.** Gemini intermittently
+   returns a patch with no applicable edit. Stopping the run there left two
+   attempts unspent, and the budget exists for exactly this transient failure.
+   This was the cause of a live failure rate of roughly one run in six.
+
+4. **Rejected edits were never fed back.** The next attempt learned only that
+   tests failed, not that its edits had been discarded and why — so it could
+   propose the same rejected edit until the budget was gone. Rejections are
+   evidence, and this loop is supposed to respond to evidence.
+
+5. **A discarded edit halted the run.** An out-of-scope edit raised an ASK
+   finding, which blocked. But the edit never reached disk — there was nothing
+   for a human to approve. Now recorded and fed back without blocking. A
+   credential (DENY), a new dependency or a test change (ASK) still block,
+   because those are real decisions.
+
+6. **The engineer could not see its callers.** The impact set is `app/client.py`;
+   the test calling `charge(100)` was not provided. Asked to fix a `TypeError`
+   in a call it could not read, Gemini made `currency` a required positional
+   argument — correct in isolation, and it broke every existing caller. The
+   tests covering the impacted code are now supplied as explicitly read-only
+   context.
+
+7. **The test command suppressed its own output.** Discovery passed `-q`, and a
+   project whose `addopts` already carries it gets `-q -q` — which suppresses
+   pytest's summary line entirely, leaving a suite that ran perfectly with no
+   counts to parse. Verbosity is the project's choice; the summary line is not
+   optional for us.
+
+8. **The rehearsal-shaped state error, again.** `PATCH_READY` is a first-pass
+   state; `ALLOWED_TRANSITIONS` has no `repair_running -> patch_ready` edge. A
+   retry patches *inside* `REPAIR_RUNNING`. The state machine was right and the
+   loop was wrong.
+
+**A Phase 1 test also caught** two new settings added without documenting them
+in `.env.example`.
+
+**Contract amendments:** `FileEdit` gained `out_of_impact_justification` —
+`justification` is required on every edit, so it could not be what marks an edit
+as out of scope, and the acceptance criterion would have been vacuous. Every
+optional field on `MigrationEngineerOutput` and `FileEdit` is `""` rather than
+`None`: Gemini's structured-output schema is an OpenAPI subset that rejects an
+optional nested inside a list, and asking for one made the model fail to produce
+any output at all — the same failure `Evidence` caused in C4-03.
+
+**What is NOT built:**
+- Nothing wires monitoring → correlation → impact → rehearsal → migration into
+  one pass. Each stage is tested end to end on its own inputs.
+- No security review of the finished patch, no branch, no pull request. Phase 8.
+- Test-command discovery covers pytest, vitest, and jest. A project using
+  anything else raises `TestCommandNotFound` rather than guessing.
+
+**Do not accidentally change:**
+- `store_result` taking a `ParsedTestResult`. It is what makes "no code path can
+  populate `test_results` from a model" structural rather than a convention.
+- Discovery raising instead of defaulting to a command, and parsing raising
+  instead of returning zeroes. "We could not check" must never read as a pass.
+- The empty-patch branch not running the suite. Validating an unchanged
+  workspace reports a pass and calls the migration done.
+- Attempts counted from rows rather than held in memory.
+- `git worktree` being allowlisted only for `add`, `remove`, `prune`, `list`.
+
+**Next intended task:** Phase 8, C8-01 — the Security Reviewer, the approval
+gate, and branch-and-PR delivery.

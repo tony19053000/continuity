@@ -189,8 +189,21 @@ class MigrationEngineerInput(_Contract):
     provider_id: str
     from_version: str
     to_version: str
+    #: What actually changed. Without this the engineer is told *where* to edit
+    #: and never *what* to edit for — live Gemini, given only the impact, quite
+    #: correctly refused: "Cannot proceed without acmepay v2 contract details."
+    change: AnalyzedChange
     impact: ImpactAnalystOutput
+    #: The files correlation says this change reaches. An edit to anything else
+    #: needs `out_of_impact_justification`, and is rejected without one.
+    impact_set: list[str] = Field(default_factory=list)
+    #: Editable files, by path.
     file_contents: dict[str, str]
+    #: Files the engineer must be able to *read* but may not edit — the tests
+    #: covering the impacted code, above all. Without them it is asked to keep a
+    #: call signature compatible with callers it cannot see, which is how a
+    #: patch that makes an argument required gets written.
+    reference_contents: dict[str, str] = Field(default_factory=dict)
     previous_failure: str | None = Field(
         default=None, description="Validator evidence from the last attempt"
     )
@@ -198,9 +211,29 @@ class MigrationEngineerInput(_Contract):
 
 
 class FileEdit(_Contract):
+    """One file rewritten in full.
+
+    There is no delete operation, deliberately: a test cannot be deleted by a
+    shape the contract does not have (`02_ARCHITECTURE.md` §12).
+    """
+
     path: str
     new_content: str
     justification: str = Field(max_length=1000)
+    #: Empty string, not `None`, and that is not a style choice. Gemini's
+    #: structured-output schema is an OpenAPI subset that rejects an optional
+    #: field nested inside a list — asking for `str | None` here made the model
+    #: fail to produce any output at all, the same way the nested `Evidence`
+    #: model did in C4-03. Empty means "this file is in the impact set".
+    out_of_impact_justification: str = Field(
+        default="",
+        max_length=1000,
+        description=(
+            "Required only when this file is NOT in the correlated impact set. "
+            "Say why the change cannot be made without touching it. Leave empty "
+            "for a file that is in the set."
+        ),
+    )
 
 
 class MigrationEngineerOutput(_Contract):
@@ -209,10 +242,11 @@ class MigrationEngineerOutput(_Contract):
     # Declared explicitly so a weakened test is a visible decision rather than a
     # silent diff. The policy engine classifies this as ASK.
     modifies_tests: bool = False
-    test_modification_justification: str | None = Field(default=None, max_length=1000)
+    # Empty rather than None, for the same Gemini schema reason as `FileEdit`.
+    test_modification_justification: str = Field(default="", max_length=1000)
     new_dependencies: list[str] = Field(default_factory=list)
-    diagnosis: str | None = Field(
-        default=None, description="Why the previous attempt failed", max_length=2000
+    diagnosis: str = Field(
+        default="", description="Why the previous attempt failed", max_length=2000
     )
 
 
