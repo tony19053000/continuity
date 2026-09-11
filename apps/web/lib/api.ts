@@ -118,3 +118,189 @@ export async function getCurrentUser(): Promise<CurrentUser | null> {
     throw error;
   }
 }
+
+// --- Projects -----------------------------------------------------------
+
+/**
+ * Every type below mirrors a backend response exactly. None of them has a
+ * default or a fallback: `04_FRONTEND_SPEC.md` forbids a component containing a
+ * hardcoded provider, change, workflow, test count, or status, and the way to
+ * guarantee that is to make absence representable — `null` here means the
+ * backend has no record, and the UI must say so rather than fill it in.
+ */
+
+export type RunState = string;
+export type Confidence = "confirmed" | "inferred";
+
+/** A score, or an explicit statement that there is not one yet. */
+export interface IntegrationHealth {
+  available: boolean;
+  score: number | null;
+  /** Published beside the score, so the arithmetic is checkable. */
+  formula: string | null;
+  inputs: Record<string, number>;
+  unavailable_reason: string | null;
+}
+
+export interface ProjectSummary {
+  id: string;
+  name: string;
+  state: RunState;
+  repository: string | null;
+  providers: number;
+  integration_points: number;
+  open_changes: number;
+  pending_approvals: number;
+  health: IntegrationHealth;
+}
+
+export interface IntegrationView {
+  provider_id: string;
+  display_name: string;
+  sdk_package: string | null;
+  detected_api_version: string | null;
+  auth_mechanism: string | null;
+  integration_points: number;
+  confidence: Confidence;
+  /** Null means never checked — not "checked and fine". */
+  last_checked_at: string | null;
+  last_check_error: string | null;
+}
+
+export interface ChangeView {
+  id: string;
+  provider_id: string;
+  old_version: string;
+  new_version: string;
+  change_type: string;
+  resource: string;
+  breaking: boolean;
+  security_relevant: boolean;
+  detected_at: string;
+  migration_run_id: string | null;
+}
+
+export interface RunView {
+  id: string;
+  provider_id: string;
+  from_version: string;
+  to_version: string;
+  state: RunState;
+  target_branch: string | null;
+  attempts: number;
+  findings: number;
+  pull_request: number | null;
+  created_at: string;
+}
+
+export interface ActivityView {
+  id: string;
+  kind: string;
+  actor: string;
+  summary: string;
+  occurred_at: string;
+  migration_run_id: string | null;
+}
+
+export interface GraphNode {
+  id: string;
+  kind: string;
+  key: string;
+  label: string;
+  confidence: Confidence;
+}
+
+export interface GraphEdge {
+  id: string;
+  kind: string;
+  source: string;
+  target: string;
+  confidence: Confidence;
+}
+
+export interface GraphView {
+  version: number | null;
+  nodes: GraphNode[];
+  edges: GraphEdge[];
+}
+
+export interface FindingView {
+  id: string;
+  migration_run_id: string;
+  category: string;
+  severity: string;
+  summary: string;
+  /** What the Security Reviewer advised. */
+  recommendation: string;
+  /** What the policy engine ruled. This one is binding. */
+  policy_decision: string;
+  disagreed: boolean;
+}
+
+export interface EvidenceReport {
+  report: Record<string, unknown>;
+  markdown: string;
+}
+
+export const listProjects = (): Promise<ProjectSummary[]> =>
+  request<ProjectSummary[]>("/projects");
+
+export const getProject = (id: string): Promise<ProjectSummary> =>
+  request<ProjectSummary>(`/projects/${id}`);
+
+export const listIntegrations = (id: string): Promise<IntegrationView[]> =>
+  request<IntegrationView[]>(`/projects/${id}/integrations`);
+
+export const listChanges = (id: string): Promise<ChangeView[]> =>
+  request<ChangeView[]>(`/projects/${id}/changes`);
+
+export const listRuns = (id: string): Promise<RunView[]> =>
+  request<RunView[]>(`/projects/${id}/runs`);
+
+export const listActivity = (id: string): Promise<ActivityView[]> =>
+  request<ActivityView[]>(`/projects/${id}/activity`);
+
+export const getGraph = (id: string): Promise<GraphView> =>
+  request<GraphView>(`/projects/${id}/graph`);
+
+export const listFindings = (id: string): Promise<FindingView[]> =>
+  request<FindingView[]>(`/projects/${id}/findings`);
+
+export const getReport = (
+  projectId: string,
+  runId: string,
+): Promise<EvidenceReport> =>
+  request<EvidenceReport>(`/projects/${projectId}/runs/${runId}/report`);
+
+// --- Approvals ----------------------------------------------------------
+
+export interface ApprovalView {
+  id: string;
+  project_id: string;
+  migration_run_id: string | null;
+  trigger: string;
+  risk: string;
+  status: "pending" | "approved" | "rejected";
+  requested_action: Record<string, unknown>;
+  agent_recommendation: string | null;
+  actor_user_id: string | null;
+  resolved_at: string | null;
+}
+
+export const listApprovals = (): Promise<ApprovalView[]> =>
+  request<ApprovalView[]>("/approvals");
+
+/**
+ * Approve or reject. The body carries no approver: the decision is attributed
+ * to the authenticated session, and the backend refuses a body that tries to
+ * name one.
+ */
+export const decideApproval = (
+  id: string,
+  decision: "approve" | "reject",
+): Promise<ApprovalView> =>
+  request<ApprovalView>(`/approvals/${id}`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ decision }),
+  });
